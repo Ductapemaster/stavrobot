@@ -400,6 +400,7 @@ export async function handlePrompt(
 
     const newMessages = [syntheticMessage, ...messagesToKeep];
     agent.replaceMessages(newMessages);
+    console.log(`[stavrobot] Compacted ${messagesToCompact.length} messages into summary, kept ${messagesToKeep.length} recent messages.`);
   }
 
   const lastAssistantMessage = agent.state.messages
