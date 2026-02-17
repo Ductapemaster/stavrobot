@@ -25,12 +25,11 @@ export async function initializeSchema(pool: pg.Pool): Promise<void> {
   `);
 }
 
-export async function initializeMemorySchema(pool: pg.Pool): Promise<void> {
+export async function initializeMemoriesSchema(pool: pg.Pool): Promise<void> {
   await pool.query(`
-    CREATE TABLE IF NOT EXISTS memory (
-      id INTEGER PRIMARY KEY DEFAULT 1,
-      content TEXT NOT NULL,
-      CHECK (id = 1)
+    CREATE TABLE IF NOT EXISTS memories (
+      id SERIAL PRIMARY KEY,
+      content TEXT NOT NULL
     )
   `);
 }
@@ -46,20 +45,37 @@ export async function initializeCompactionsSchema(pool: pg.Pool): Promise<void> 
   `);
 }
 
-export async function readMemory(pool: pg.Pool): Promise<string> {
-  const result = await pool.query("SELECT content FROM memory WHERE id = 1");
-  if (result.rows.length === 0) {
-    return "";
-  }
-  return result.rows[0].content as string;
+export interface Memory {
+  id: number;
+  content: string;
 }
 
-export async function updateMemory(pool: pg.Pool, content: string): Promise<void> {
-  await pool.query(
-    `INSERT INTO memory (id, content) VALUES (1, $1)
-     ON CONFLICT (id) DO UPDATE SET content = EXCLUDED.content`,
-    [content]
-  );
+export async function loadAllMemories(pool: pg.Pool): Promise<Memory[]> {
+  const result = await pool.query("SELECT id, content FROM memories ORDER BY id");
+  return result.rows.map((row) => ({
+    id: row.id as number,
+    content: row.content as string,
+  }));
+}
+
+export async function upsertMemory(pool: pg.Pool, id: number | undefined, content: string): Promise<number> {
+  if (id === undefined) {
+    const result = await pool.query(
+      "INSERT INTO memories (content) VALUES ($1) RETURNING id",
+      [content]
+    );
+    return result.rows[0].id as number;
+  } else {
+    await pool.query(
+      "UPDATE memories SET content = $1 WHERE id = $2",
+      [content, id]
+    );
+    return id;
+  }
+}
+
+export async function deleteMemory(pool: pg.Pool, id: number): Promise<void> {
+  await pool.query("DELETE FROM memories WHERE id = $1", [id]);
 }
 
 export interface Compaction {

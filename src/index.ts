@@ -2,7 +2,7 @@ import http from "http";
 import type pg from "pg";
 import type { Agent } from "@mariozechner/pi-agent-core";
 import { loadConfig, type Config } from "./config.js";
-import { connectDatabase, initializeSchema, initializeMemorySchema, initializeCompactionsSchema } from "./database.js";
+import { connectDatabase, initializeSchema, initializeMemoriesSchema, initializeCompactionsSchema } from "./database.js";
 import { createAgent, handlePrompt } from "./agent.js";
 
 async function readRequestBody(request: http.IncomingMessage): Promise<string> {
@@ -57,7 +57,7 @@ async function main(): Promise<void> {
   const config = loadConfig();
   const pool = await connectDatabase(config.postgres);
   await initializeSchema(pool);
-  await initializeMemorySchema(pool);
+  await initializeMemoriesSchema(pool);
   await initializeCompactionsSchema(pool);
   const agent = await createAgent(config, pool);
 

@@ -2,7 +2,7 @@ import pg from "pg";
 import { Type, getModel, type TextContent, complete, type AssistantMessage } from "@mariozechner/pi-ai";
 import { Agent, type AgentTool, type AgentToolResult, type AgentMessage } from "@mariozechner/pi-agent-core";
 import type { Config } from "./config.js";
-import { executeSql, loadMessages, saveMessage, readMemory, updateMemory, saveCompaction, loadLatestCompaction } from "./database.js";
+import { executeSql, loadMessages, saveMessage, saveCompaction, loadLatestCompaction, loadAllMemories, upsertMemory, deleteMemory, type Memory } from "./database.js";
 
 export function createExecuteSqlTool(pool: pg.Pool): AgentTool {
   return {
@@ -30,17 +30,41 @@ export function createUpdateMemoryTool(pool: pg.Pool): AgentTool {
   return {
     name: "update_memory",
     label: "Update memory",
-    description: "Update your persistent memory. This memory is injected into your system prompt at the start of every session, so use it to store important facts, user preferences, and context that should persist. Pass the complete new memory content — this replaces the entire memory. Pass an empty string to clear it.",
+    description: "Create or update a persistent memory. To create a new memory, omit the id. To update an existing memory, provide its id. Memories persist across sessions and are shown to you at the start of every conversation.",
     parameters: Type.Object({
-      content: Type.String({ description: "The complete new memory content. Replaces the entire existing memory." }),
+      id: Type.Optional(Type.Number({ description: "The id of the memory to update. Omit to create a new memory." })),
+      content: Type.String({ description: "The content of the memory." }),
     }),
     execute: async (
       toolCallId: string,
       params: unknown
     ): Promise<AgentToolResult<{ message: string }>> => {
-      const { content } = params as { content: string };
-      await updateMemory(pool, content);
-      const message = content === "" ? "Memory cleared." : "Memory updated.";
+      const { id, content } = params as { id?: number; content: string };
+      const memoryId = await upsertMemory(pool, id, content);
+      const message = id === undefined ? `Memory ${memoryId} created.` : `Memory ${memoryId} updated.`;
+      return {
+        content: [{ type: "text" as const, text: message }],
+        details: { message },
+      };
+    },
+  };
+}
+
+export function createDeleteMemoryTool(pool: pg.Pool): AgentTool {
+  return {
+    name: "delete_memory",
+    label: "Delete memory",
+    description: "Delete a persistent memory by its id.",
+    parameters: Type.Object({
+      id: Type.Number({ description: "The id of the memory to delete." }),
+    }),
+    execute: async (
+      toolCallId: string,
+      params: unknown
+    ): Promise<AgentToolResult<{ message: string }>> => {
+      const { id } = params as { id: number };
+      await deleteMemory(pool, id);
+      const message = `Memory ${id} deleted.`;
       return {
         content: [{ type: "text" as const, text: message }],
         details: { message },
@@ -52,7 +76,7 @@ export function createUpdateMemoryTool(pool: pg.Pool): AgentTool {
 export async function createAgent(config: Config, pool: pg.Pool): Promise<Agent> {
   const model = getModel(config.provider as any, config.model as any);
   const messages = await loadMessages(pool);
-  const tools = [createExecuteSqlTool(pool), createUpdateMemoryTool(pool)];
+  const tools = [createExecuteSqlTool(pool), createUpdateMemoryTool(pool), createDeleteMemoryTool(pool)];
 
   const agent = new Agent({
     initialState: {
@@ -111,13 +135,26 @@ export async function handlePrompt(
   userMessage: string,
   config: Config
 ): Promise<string> {
-  const memory = await readMemory(pool);
+  const memories = await loadAllMemories(pool);
   
-  if (memory === "") {
+  if (memories.length === 0) {
     agent.setSystemPrompt(config.systemPrompt);
   } else {
-    const systemPromptWithMemory = `${config.systemPrompt}\n\n<memory>\n${memory}\n</memory>`;
-    agent.setSystemPrompt(systemPromptWithMemory);
+    const memoryLines: string[] = [
+      "These are your memories, they are things you stored yourself. Use the `update_memory` tool to update a memory, and the `delete_memory` tool to delete a memory. You should add anything that seems important to the user, anything that might have bearing on the future, or anything that will be important to recall later. However, do keep them to a few paragraphs, to avoid filling up the context.",
+      "",
+      "Here are your memories:",
+      "",
+    ];
+    
+    for (const memory of memories) {
+      memoryLines.push(`[Memory ${memory.id}]`);
+      memoryLines.push(memory.content);
+      memoryLines.push("");
+    }
+    
+    const injectionText = memoryLines.join("\n");
+    agent.setSystemPrompt(`${config.systemPrompt}\n\n${injectionText}`);
   }
 
   const savePromises: Promise<void>[] = [];
