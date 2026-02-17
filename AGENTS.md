@@ -139,6 +139,8 @@ The Python code (`client.py`) is a standalone CLI client with no third-party dep
 - When asked to commit, run `jj diff` first, then `jj commit -m` with a message
   describing the whole change.
 - Do not mention AI in commit messages. Write them as if the human wrote the code.
+- DO NOT REVERT ANY CHANGES. If you notice unrelated changes in the repo, pause and ask
+  the user, as they might be changes the user has made.
 
 ## Context7
 

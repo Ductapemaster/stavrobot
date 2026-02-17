@@ -17,6 +17,8 @@ services:
     build: .
     ports:
       - "3000:3000"
+    environment:
+      TZ: Europe/Athens
     volumes:
       - ./config.toml:/app/config.toml:ro
       - ./data/app:/app/data

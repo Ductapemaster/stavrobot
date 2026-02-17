@@ -1,9 +1,9 @@
 import http from "http";
-import type pg from "pg";
-import type { Agent } from "@mariozechner/pi-agent-core";
-import { loadConfig, type Config } from "./config.js";
-import { connectDatabase, initializeSchema, initializeMemoriesSchema, initializeCompactionsSchema } from "./database.js";
-import { createAgent, handlePrompt } from "./agent.js";
+import { loadConfig } from "./config.js";
+import { connectDatabase, initializeSchema, initializeMemoriesSchema, initializeCompactionsSchema, initializeCronSchema } from "./database.js";
+import { createAgent } from "./agent.js";
+import { initializeQueue, enqueueMessage } from "./queue.js";
+import { initializeScheduler } from "./scheduler.js";
 
 async function readRequestBody(request: http.IncomingMessage): Promise<string> {
   const chunks: Buffer[] = [];
@@ -15,10 +15,7 @@ async function readRequestBody(request: http.IncomingMessage): Promise<string> {
 
 async function handleChatRequest(
   request: http.IncomingMessage,
-  response: http.ServerResponse,
-  agent: Agent,
-  pool: pg.Pool,
-  config: Config
+  response: http.ServerResponse
 ): Promise<void> {
   try {
     const body = await readRequestBody(request);
@@ -48,7 +45,7 @@ async function handleChatRequest(
 
     console.log("[stavrobot] Incoming request:", { message: parsedBody.message, source, sender });
 
-    const assistantResponse = await handlePrompt(agent, pool, parsedBody.message, config, source, sender);
+    const assistantResponse = await enqueueMessage(parsedBody.message, source, sender);
 
     if (assistantResponse) {
       console.log("[stavrobot] Agent response:", assistantResponse);
@@ -72,11 +69,14 @@ async function main(): Promise<void> {
   await initializeSchema(pool);
   await initializeMemoriesSchema(pool);
   await initializeCompactionsSchema(pool);
+  await initializeCronSchema(pool);
   const agent = await createAgent(config, pool);
+  initializeQueue(agent, pool, config);
+  await initializeScheduler(pool);
 
   const server = http.createServer((request: http.IncomingMessage, response: http.ServerResponse): void => {
     if (request.method === "POST" && request.url === "/chat") {
-      handleChatRequest(request, response, agent, pool, config);
+      handleChatRequest(request, response);
     } else {
       response.writeHead(404, { "Content-Type": "application/json" });
       response.end(JSON.stringify({ error: "Not found" }));

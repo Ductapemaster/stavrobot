@@ -148,6 +148,100 @@ export async function saveMessage(pool: pg.Pool, message: AgentMessage): Promise
   );
 }
 
+export async function initializeCronSchema(pool: pg.Pool): Promise<void> {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS cron_entries (
+      id SERIAL PRIMARY KEY,
+      cron_expression TEXT,
+      fire_at TIMESTAMPTZ,
+      note TEXT NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      CHECK (
+        (cron_expression IS NOT NULL AND fire_at IS NULL) OR
+        (cron_expression IS NULL AND fire_at IS NOT NULL)
+      )
+    )
+  `);
+}
+
+export interface CronEntry {
+  id: number;
+  cronExpression: string | null;
+  fireAt: Date | null;
+  note: string;
+}
+
+export async function createCronEntry(
+  pool: pg.Pool,
+  cronExpression: string | null,
+  fireAt: Date | null,
+  note: string,
+): Promise<CronEntry> {
+  const result = await pool.query(
+    "INSERT INTO cron_entries (cron_expression, fire_at, note) VALUES ($1, $2, $3) RETURNING id, cron_expression, fire_at, note",
+    [cronExpression, fireAt, note],
+  );
+  const row = result.rows[0];
+  return {
+    id: row.id as number,
+    cronExpression: row.cron_expression as string | null,
+    fireAt: row.fire_at as Date | null,
+    note: row.note as string,
+  };
+}
+
+export async function updateCronEntry(
+  pool: pg.Pool,
+  id: number,
+  fields: { cronExpression?: string | null; fireAt?: Date | null; note?: string },
+): Promise<CronEntry> {
+  const setClauses: string[] = [];
+  const values: unknown[] = [];
+  let paramIndex = 1;
+
+  if ("cronExpression" in fields) {
+    setClauses.push(`cron_expression = $${paramIndex++}`);
+    values.push(fields.cronExpression);
+  }
+  if ("fireAt" in fields) {
+    setClauses.push(`fire_at = $${paramIndex++}`);
+    values.push(fields.fireAt);
+  }
+  if ("note" in fields) {
+    setClauses.push(`note = $${paramIndex++}`);
+    values.push(fields.note);
+  }
+
+  values.push(id);
+  const result = await pool.query(
+    `UPDATE cron_entries SET ${setClauses.join(", ")} WHERE id = $${paramIndex} RETURNING id, cron_expression, fire_at, note`,
+    values,
+  );
+  const row = result.rows[0];
+  return {
+    id: row.id as number,
+    cronExpression: row.cron_expression as string | null,
+    fireAt: row.fire_at as Date | null,
+    note: row.note as string,
+  };
+}
+
+export async function deleteCronEntry(pool: pg.Pool, id: number): Promise<void> {
+  await pool.query("DELETE FROM cron_entries WHERE id = $1", [id]);
+}
+
+export async function listCronEntries(pool: pg.Pool): Promise<CronEntry[]> {
+  const result = await pool.query(
+    "SELECT id, cron_expression, fire_at, note FROM cron_entries ORDER BY id",
+  );
+  return result.rows.map((row) => ({
+    id: row.id as number,
+    cronExpression: row.cron_expression as string | null,
+    fireAt: row.fire_at as Date | null,
+    note: row.note as string,
+  }));
+}
+
 export async function executeSql(pool: pg.Pool, sql: string): Promise<string> {
   const result = await pool.query(sql);
   

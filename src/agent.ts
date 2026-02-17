@@ -6,7 +6,8 @@ import { Type, getModel, type TextContent, complete } from "@mariozechner/pi-ai"
 import { Agent, type AgentTool, type AgentToolResult, type AgentMessage } from "@mariozechner/pi-agent-core";
 import type { Config, TtsConfig } from "./config.js";
 import { getApiKey } from "./auth.js";
-import { executeSql, loadMessages, saveMessage, saveCompaction, loadLatestCompaction, loadAllMemories, upsertMemory, deleteMemory, type Memory } from "./database.js";
+import { executeSql, loadMessages, saveMessage, saveCompaction, loadLatestCompaction, loadAllMemories, upsertMemory, deleteMemory, createCronEntry, updateCronEntry, deleteCronEntry, listCronEntries, type Memory } from "./database.js";
+import { reloadScheduler } from "./scheduler.js";
 
 // A simple boolean flag to prevent concurrent compaction runs. If a compaction
 // is already in progress when another request triggers the threshold, we skip
@@ -224,10 +225,141 @@ export function createSendSignalMessageTool(): AgentTool {
   };
 }
 
+export function createManageCronTool(pool: pg.Pool): AgentTool {
+  return {
+    name: "manage_cron",
+    label: "Manage cron",
+    description: "Create, update, delete, or list scheduled cron entries. Recurring entries use cron expressions (e.g. '0 9 * * *' for daily at 9am). One-shot entries use an ISO datetime.",
+    parameters: Type.Object({
+      action: Type.Union([
+        Type.Literal("create"),
+        Type.Literal("update"),
+        Type.Literal("delete"),
+        Type.Literal("list"),
+      ], { description: "Action to perform: create, update, delete, or list." }),
+      id: Type.Optional(Type.Number({ description: "Entry id. Required for update and delete." })),
+      schedule: Type.Optional(Type.String({ description: "Cron expression for recurring entries (e.g. '*/30 * * * *'). Mutually exclusive with fire_at." })),
+      fire_at: Type.Optional(Type.String({ description: "ISO 8601 datetime for one-shot entries (e.g. '2026-03-01T09:00:00Z'). Mutually exclusive with schedule." })),
+      note: Type.Optional(Type.String({ description: "The note/message for this cron entry. Required for create." })),
+    }),
+    execute: async (
+      toolCallId: string,
+      params: unknown
+    ): Promise<AgentToolResult<{ message: string }>> => {
+      const raw = params as {
+        action: string;
+        id?: number;
+        schedule?: string;
+        fire_at?: string;
+        note?: string;
+      };
+
+      const action = raw.action;
+
+      if (action === "create") {
+        if (raw.note === undefined || raw.note.trim() === "") {
+          return {
+            content: [{ type: "text" as const, text: "Error: note is required for create." }],
+            details: { message: "Error: note is required for create." },
+          };
+        }
+        if (raw.schedule === undefined && raw.fire_at === undefined) {
+          return {
+            content: [{ type: "text" as const, text: "Error: exactly one of schedule or fire_at must be provided." }],
+            details: { message: "Error: exactly one of schedule or fire_at must be provided." },
+          };
+        }
+        if (raw.schedule !== undefined && raw.fire_at !== undefined) {
+          return {
+            content: [{ type: "text" as const, text: "Error: schedule and fire_at are mutually exclusive." }],
+            details: { message: "Error: schedule and fire_at are mutually exclusive." },
+          };
+        }
+        const cronExpression = raw.schedule ?? null;
+        const fireAt = raw.fire_at !== undefined ? new Date(raw.fire_at) : null;
+        const entry = await createCronEntry(pool, cronExpression, fireAt, raw.note.trim());
+        await reloadScheduler(pool);
+        const message = `Cron entry ${entry.id} created.`;
+        console.log(`[stavrobot] ${message}`);
+        return {
+          content: [{ type: "text" as const, text: message }],
+          details: { message },
+        };
+      }
+
+      if (action === "update") {
+        if (raw.id === undefined) {
+          return {
+            content: [{ type: "text" as const, text: "Error: id is required for update." }],
+            details: { message: "Error: id is required for update." },
+          };
+        }
+        if (raw.schedule !== undefined && raw.fire_at !== undefined) {
+          return {
+            content: [{ type: "text" as const, text: "Error: schedule and fire_at are mutually exclusive." }],
+            details: { message: "Error: schedule and fire_at are mutually exclusive." },
+          };
+        }
+        const fields: { cronExpression?: string | null; fireAt?: Date | null; note?: string } = {};
+        if (raw.schedule !== undefined) {
+          fields.cronExpression = raw.schedule;
+          fields.fireAt = null;
+        }
+        if (raw.fire_at !== undefined) {
+          fields.cronExpression = null;
+          fields.fireAt = new Date(raw.fire_at);
+        }
+        if (raw.note !== undefined) {
+          fields.note = raw.note;
+        }
+        await updateCronEntry(pool, raw.id, fields);
+        await reloadScheduler(pool);
+        const message = `Cron entry ${raw.id} updated.`;
+        console.log(`[stavrobot] ${message}`);
+        return {
+          content: [{ type: "text" as const, text: message }],
+          details: { message },
+        };
+      }
+
+      if (action === "delete") {
+        if (raw.id === undefined) {
+          return {
+            content: [{ type: "text" as const, text: "Error: id is required for delete." }],
+            details: { message: "Error: id is required for delete." },
+          };
+        }
+        await deleteCronEntry(pool, raw.id);
+        await reloadScheduler(pool);
+        const message = `Cron entry ${raw.id} deleted.`;
+        console.log(`[stavrobot] ${message}`);
+        return {
+          content: [{ type: "text" as const, text: message }],
+          details: { message },
+        };
+      }
+
+      if (action === "list") {
+        const entries = await listCronEntries(pool);
+        const message = JSON.stringify(entries);
+        return {
+          content: [{ type: "text" as const, text: message }],
+          details: { message },
+        };
+      }
+
+      return {
+        content: [{ type: "text" as const, text: `Error: unknown action '${action}'. Valid actions: create, update, delete, list.` }],
+        details: { message: `Error: unknown action '${action}'.` },
+      };
+    },
+  };
+}
+
 export async function createAgent(config: Config, pool: pg.Pool): Promise<Agent> {
   const model = getModel(config.provider as any, config.model as any);
   const messages = await loadMessages(pool);
-  const tools = [createExecuteSqlTool(pool), createUpdateMemoryTool(pool), createDeleteMemoryTool(pool), createSendSignalMessageTool()];
+  const tools = [createExecuteSqlTool(pool), createUpdateMemoryTool(pool), createDeleteMemoryTool(pool), createSendSignalMessageTool(), createManageCronTool(pool)];
   if (config.tts !== undefined) {
     tools.push(createTextToSpeechTool(config.tts));
   }
