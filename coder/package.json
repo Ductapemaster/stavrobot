@@ -1,5 +1,5 @@
 {
-  "name": "stavrobot",
+  "name": "stavrobot-coder",
   "version": "1.0.0",
   "type": "module",
   "engines": {
@@ -12,15 +12,11 @@
   },
   "dependencies": {
     "@iarna/toml": "^2.2.5",
-    "@mariozechner/pi-agent-core": "^0.53.0",
-    "@mariozechner/pi-ai": "^0.53.0",
-    "cron-parser": "^5.5.0",
-    "pg": "^8.11.3"
+    "@mariozechner/pi-coding-agent": "^0.53.0"
   },
   "devDependencies": {
     "@types/iarna__toml": "^2.0.5",
     "@types/node": "^20.11.0",
-    "@types/pg": "^8.11.0",
     "tsx": "^4.7.0",
     "typescript": "^5.3.3"
   }

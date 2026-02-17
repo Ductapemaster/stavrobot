@@ -32,6 +32,10 @@ export interface WebFetchConfig {
   model: string;
 }
 
+export interface CoderConfig {
+  model: string;
+}
+
 export interface Config {
   provider: string;
   model: string;
@@ -43,6 +47,7 @@ export interface Config {
   stt?: SttConfig;
   webSearch?: WebSearchConfig;
   webFetch?: WebFetchConfig;
+  coder?: CoderConfig;
 }
 
 export function loadConfig(): Config {

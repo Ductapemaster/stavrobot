@@ -9,7 +9,7 @@ import urllib.request
 
 def get_server_url() -> str:
     """Return the server URL from environment or default."""
-    return os.environ.get("STAVROBOT_URL") or "http://localhost:3000"
+    return os.environ.get("STAVROBOT_URL") or "http://localhost:10567"
 
 
 def send_message(url: str, message: str) -> str:

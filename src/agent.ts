@@ -10,6 +10,7 @@ import { executeSql, loadMessages, saveMessage, saveCompaction, loadLatestCompac
 import { reloadScheduler } from "./scheduler.js";
 import { createWebSearchTool } from "./web-search.js";
 import { createWebFetchTool } from "./web-fetch.js";
+import { createListToolsTool, createShowToolTool, createRunToolTool, createRequestCodingTaskTool } from "./coder-tools.js";
 
 // A simple boolean flag to prevent concurrent compaction runs. If a compaction
 // is already in progress when another request triggers the threshold, we skip
@@ -370,6 +371,14 @@ export async function createAgent(config: Config, pool: pg.Pool): Promise<Agent>
   }
   if (config.tts !== undefined) {
     tools.push(createTextToSpeechTool(config.tts));
+  }
+  if (config.coder !== undefined) {
+    tools.push(
+      createListToolsTool(),
+      createShowToolTool(),
+      createRunToolTool(),
+      createRequestCodingTaskTool(),
+    );
   }
 
   const agent = new Agent({
