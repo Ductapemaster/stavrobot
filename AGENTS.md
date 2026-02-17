@@ -140,6 +140,11 @@ The Python code (`client.py`) is a standalone CLI client with no third-party dep
   describing the whole change.
 - Do not mention AI in commit messages. Write them as if the human wrote the code.
 
+## Context7
+
+- The LLM agent library used in this project is from the Pi mono repo. The Context7
+  library ID is `/badlogic/pi-mono`.
+
 ## General rules
 
 - Do not write forgiving code. Let errors propagate rather than silently catching them.

@@ -25,7 +25,8 @@ export interface SttConfig {
 export interface Config {
   provider: string;
   model: string;
-  apiKey: string;
+  apiKey?: string;
+  authFile?: string;
   systemPrompt: string;
   postgres: PostgresConfig;
   tts?: TtsConfig;
@@ -35,5 +36,14 @@ export interface Config {
 export function loadConfig(): Config {
   const configPath = process.env.CONFIG_PATH || "config.toml";
   const configContent = fs.readFileSync(configPath, "utf-8");
-  return TOML.parse(configContent) as unknown as Config;
+  const config = TOML.parse(configContent) as unknown as Config;
+
+  if (config.apiKey === undefined && config.authFile === undefined) {
+    throw new Error("Config must specify either apiKey or authFile.");
+  }
+  if (config.apiKey !== undefined && config.authFile !== undefined) {
+    throw new Error("Config must specify either apiKey or authFile, not both.");
+  }
+
+  return config;
 }

@@ -5,6 +5,7 @@ import pg from "pg";
 import { Type, getModel, type TextContent, complete, type AssistantMessage } from "@mariozechner/pi-ai";
 import { Agent, type AgentTool, type AgentToolResult, type AgentMessage } from "@mariozechner/pi-agent-core";
 import type { Config, TtsConfig } from "./config.js";
+import { getApiKey } from "./auth.js";
 import { executeSql, loadMessages, saveMessage, saveCompaction, loadLatestCompaction, loadAllMemories, upsertMemory, deleteMemory, type Memory } from "./database.js";
 
 export function createExecuteSqlTool(pool: pg.Pool): AgentTool {
@@ -231,7 +232,7 @@ export async function createAgent(config: Config, pool: pg.Pool): Promise<Agent>
       tools,
       messages,
     },
-    getApiKey: () => config.apiKey,
+    getApiKey: () => getApiKey(config),
   });
 
   return agent;
@@ -341,6 +342,7 @@ export async function handlePrompt(
     const serializedMessages = serializeMessagesForSummary(messagesToCompact);
     const summarySystemPrompt = "Summarize the following conversation concisely. Preserve all important facts, decisions, user preferences, and context. The summary will replace these messages in the conversation history.";
     
+    const apiKey = await getApiKey(config);
     const response = await complete(
       agent.state.model,
       {
@@ -353,7 +355,7 @@ export async function handlePrompt(
           },
         ],
       },
-      { apiKey: config.apiKey }
+      { apiKey }
     );
 
     const summaryText = response.content

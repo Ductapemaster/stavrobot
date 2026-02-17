@@ -19,6 +19,7 @@ services:
       - "3000:3000"
     volumes:
       - ./config.toml:/app/config.toml:ro
+      - ./data/app:/app/data
     depends_on:
       postgres:
         condition: service_healthy
