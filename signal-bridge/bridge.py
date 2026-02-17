@@ -92,6 +92,7 @@ def start_signal_cli(account: str) -> subprocess.Popen:
 
 def send_agent_request(message_text: str, source_number: str) -> str:
     """Send a message to the agent API and return the response."""
+    log(f"send_agent_request: sending to agent API (message length={len(message_text)}, sender={source_number})")
     connection = http.client.HTTPConnection("app", 3000, timeout=60)
     body = json.dumps({"message": message_text, "source": "signal", "sender": source_number})
     headers = {"Content-Type": "application/json"}
@@ -99,8 +100,10 @@ def send_agent_request(message_text: str, source_number: str) -> str:
     response = connection.getresponse()
     response_data = response.read()
     connection.close()
+    log(f"send_agent_request: agent API response status={response.status}, body length={len(response_data)}")
 
     if response.status != 200:
+        log(f"send_agent_request: error response body: {response_data.decode()}")
         raise RuntimeError(f"Agent API returned status {response.status}")
 
     response_json = json.loads(response_data)
@@ -111,18 +114,73 @@ def send_agent_request(message_text: str, source_number: str) -> str:
     return response_json["response"]
 
 
-def transcribe_audio(file_path: str, stt_config: dict) -> str:
+# The OpenAI transcription API only accepts these MIME types.
+SUPPORTED_AUDIO_TYPES: set[str] = {
+    "audio/mpeg", "audio/mp3", "audio/mp4", "audio/m4a",
+    "audio/mpga", "audio/wav", "audio/x-wav", "audio/webm",
+}
+
+
+def convert_audio_to_mp3(file_path: str, content_type: str) -> str | None:
+    """Convert an audio file to mp3 using ffmpeg if its MIME type is unsupported.
+
+    Returns the path to a temporary mp3 file if conversion was needed, or None
+    if the original file is already in a supported format.
+    """
+    if content_type in SUPPORTED_AUDIO_TYPES:
+        log(f"convert_audio_to_mp3: {content_type!r} is supported, no conversion needed")
+        return None
+
+    log(f"convert_audio_to_mp3: {content_type!r} is not supported, converting to mp3")
+    temp_file = tempfile.NamedTemporaryFile(suffix=".mp3", delete=False)
+    temp_file.close()
+    result = subprocess.run(
+        ["ffmpeg", "-y", "-i", file_path, "-c:a", "libmp3lame", "-q:a", "2", temp_file.name],
+        capture_output=True,
+    )
+    if result.returncode != 0:
+        try:
+            os.unlink(temp_file.name)
+        except OSError:
+            pass
+        raise RuntimeError(
+            f"ffmpeg conversion failed (exit {result.returncode}): {result.stderr.decode()}"
+        )
+    log(f"convert_audio_to_mp3: converted to {temp_file.name} ({os.path.getsize(temp_file.name)} bytes)")
+    return temp_file.name
+
+
+def transcribe_audio(file_path: str, stt_config: dict, content_type: str) -> str:
     """Transcribe an audio file using the OpenAI audio transcriptions API.
 
     Constructs a multipart/form-data request manually using stdlib only,
-    as the project avoids third-party HTTP libraries.
+    as the project avoids third-party HTTP libraries. If the file is in an
+    unsupported format, it is first converted to mp3 via ffmpeg.
     """
     api_key = stt_config["apiKey"]
     model = stt_config["model"]
+    log(f"transcribe_audio: file_path={file_path}, model={model}, content_type={content_type}")
+
+    converted_path = convert_audio_to_mp3(file_path, content_type)
+    actual_path = converted_path if converted_path is not None else file_path
+
+    try:
+        return _transcribe_audio_file(actual_path, api_key, model)
+    finally:
+        if converted_path is not None:
+            try:
+                os.unlink(converted_path)
+            except OSError:
+                pass
+
+
+def _transcribe_audio_file(file_path: str, api_key: str, model: str) -> str:
+    """Send an audio file to the OpenAI transcription API and return the text."""
     filename = os.path.basename(file_path)
 
     with open(file_path, "rb") as audio_file:
         audio_bytes = audio_file.read()
+    log(f"transcribe_audio: read {len(audio_bytes)} bytes from {filename}")
 
     boundary = uuid.uuid4().hex
     content_type_header = f"multipart/form-data; boundary={boundary}"
@@ -145,6 +203,7 @@ def transcribe_audio(file_path: str, stt_config: dict) -> str:
     parts.append(f"--{boundary}--\r\n".encode())
 
     body = b"".join(parts)
+    log(f"transcribe_audio: sending {len(body)} bytes to OpenAI API (POST /v1/audio/transcriptions)")
 
     connection = http.client.HTTPSConnection("api.openai.com", timeout=60)
     headers = {
@@ -156,13 +215,16 @@ def transcribe_audio(file_path: str, stt_config: dict) -> str:
     response = connection.getresponse()
     response_data = response.read()
     connection.close()
+    log(f"transcribe_audio: OpenAI API response status={response.status}, body length={len(response_data)}")
 
     if response.status != 200:
+        log(f"transcribe_audio: API error response body: {response_data.decode()}")
         raise RuntimeError(
             f"OpenAI transcription API returned status {response.status}: {response_data.decode()}"
         )
 
     result = json.loads(response_data)
+    log(f"transcribe_audio: parsed response: {result!r}")
     if "text" not in result or not isinstance(result["text"], str):
         raise RuntimeError(
             f"OpenAI transcription API returned unexpected response shape: {result!r}"
@@ -375,11 +437,13 @@ def process_signal_event(
 ) -> None:
     """Process a Signal receive event and handle the message."""
     envelope = event_data.get("envelope", {})
+    log(f"Processing event: envelope keys={list(envelope.keys())}")
 
     source_number = envelope.get("sourceNumber")
     data_message = envelope.get("dataMessage")
 
     if not data_message:
+        log(f"No dataMessage in envelope, skipping (source={source_number})")
         return
 
     if source_number not in allowed_numbers:
@@ -387,30 +451,39 @@ def process_signal_event(
         return
 
     message_text: str | None = data_message.get("message")
+    log(f"dataMessage keys={list(data_message.keys())}, message_text={message_text!r}")
 
     # Check for audio attachments and transcribe them if STT is configured.
     attachments = data_message.get("attachments", [])
+    log(f"Attachments field in dataMessage: {attachments!r}")
     if isinstance(attachments, list):
-        for attachment in attachments:
+        log(f"Processing {len(attachments)} attachment(s)")
+        for index, attachment in enumerate(attachments):
             if not isinstance(attachment, dict):
+                log(f"Attachment {index}: skipping, not a dict: {attachment!r}")
                 continue
             content_type = attachment.get("contentType", "")
+            log(f"Attachment {index}: contentType={content_type!r}, keys={list(attachment.keys())}")
             if not isinstance(content_type, str) or not content_type.startswith("audio/"):
+                log(f"Attachment {index}: skipping, not an audio type")
                 continue
             attachment_id = attachment.get("id")
             if not isinstance(attachment_id, str):
+                log(f"Attachment {index}: skipping, id is not a string: {attachment_id!r}")
                 continue
             if stt_config is None:
                 log("Voice note received but STT is not configured, skipping transcription.")
                 continue
             file_path = f"/root/.local/share/signal-cli/attachments/{attachment_id}"
-            log(f"Transcribing voice note: {file_path}")
+            file_exists = os.path.isfile(file_path)
+            file_size = os.path.getsize(file_path) if file_exists else None
+            log(f"Transcribing voice note: {file_path} (exists={file_exists}, size={file_size})")
             try:
-                transcription = transcribe_audio(file_path, stt_config)
+                transcription = transcribe_audio(file_path, stt_config, content_type)
             except (OSError, RuntimeError, json.JSONDecodeError) as error:
                 log(f"Error transcribing voice note {file_path}: {error}")
                 continue
-            log(f"Transcription: {transcription}")
+            log(f"Transcription result: {transcription!r}")
             voice_text = f"[Voice note]: {transcription}"
             if message_text:
                 message_text = f"{message_text}\n{voice_text}"
@@ -418,6 +491,7 @@ def process_signal_event(
                 message_text = voice_text
 
     if not message_text:
+        log(f"No message text after attachment processing, skipping (source={source_number})")
         return
 
     log(f"Received message from {source_number}: {message_text}")
@@ -494,6 +568,7 @@ def main() -> None:
     log(f"Allowed numbers: {allowed_numbers}")
 
     stt_config_raw = config.get("stt")
+    log(f"Raw [stt] config: {stt_config_raw!r}")
     stt_config: dict | None
     if stt_config_raw is None:
         log("Warning: [stt] section not found in config.toml, voice note transcription disabled.")
@@ -511,6 +586,7 @@ def main() -> None:
             log("Error: [stt] model must be a non-empty string. Voice note transcription disabled.")
             stt_config = None
         else:
+            log(f"STT configured: provider={stt_config_raw.get('provider')}, model={model}, apiKey={'***' + api_key[-4:] if len(api_key) > 4 else '****'}")
             stt_config = stt_config_raw
 
     signal_cli_process = start_signal_cli(account)
