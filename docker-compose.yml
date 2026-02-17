@@ -16,7 +16,7 @@ services:
   app:
     build: .
     ports:
-      - "3000:3000"
+      - "10567:10567"
     environment:
       TZ: Europe/Athens
     volumes:
