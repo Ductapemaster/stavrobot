@@ -117,8 +117,21 @@ export async function loadMessages(pool: pg.Pool): Promise<AgentMessage[]> {
     "SELECT content FROM messages WHERE id > $1 ORDER BY id",
     [compaction.upToMessageId]
   );
-  const messages = result.rows.map((row) => row.content as AgentMessage);
-  
+  let messages = result.rows.map((row) => row.content as AgentMessage);
+
+  // Drop any leading toolResult messages. These can appear when the compaction
+  // boundary landed just before a tool-result row that belongs to a tool-use
+  // block already included in the summary. Keeping them would produce an
+  // orphaned tool_result with no preceding assistant/tool_use, which the API
+  // rejects with a 400.
+  let firstNonToolResult = 0;
+  while (firstNonToolResult < messages.length && messages[firstNonToolResult].role === "toolResult") {
+    firstNonToolResult++;
+  }
+  if (firstNonToolResult > 0) {
+    messages = messages.slice(firstNonToolResult);
+  }
+
   const syntheticMessage: AgentMessage = {
     role: "user",
     content: [{ type: "text", text: `[Summary of earlier conversation]\n${compaction.summary}` }],

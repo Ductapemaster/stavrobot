@@ -8,6 +8,11 @@ import type { Config, TtsConfig } from "./config.js";
 import { getApiKey } from "./auth.js";
 import { executeSql, loadMessages, saveMessage, saveCompaction, loadLatestCompaction, loadAllMemories, upsertMemory, deleteMemory, type Memory } from "./database.js";
 
+// A simple boolean flag to prevent concurrent compaction runs. If a compaction
+// is already in progress when another request triggers the threshold, we skip
+// rather than queue, because queuing would compact already-compacted messages.
+let compactionInProgress = false;
+
 export function createExecuteSqlTool(pool: pg.Pool): AgentTool {
   return {
     name: "execute_sql",
@@ -340,55 +345,78 @@ export async function handlePrompt(
     console.error("[stavrobot] Agent error:", agent.state.error);
   }
 
-  if (agent.state.messages.length > 40) {
-    const currentMessages = agent.state.messages;
-    const messagesToCompact = currentMessages.slice(0, -20);
-    const messagesToKeep = currentMessages.slice(-20);
+  if (agent.state.messages.length > 40 && !compactionInProgress) {
+    compactionInProgress = true;
+    try {
+      const currentMessages = agent.state.messages;
 
-    const serializedMessages = serializeMessagesForSummary(messagesToCompact);
-    const summarySystemPrompt = "Summarize the following conversation concisely. Preserve all important facts, decisions, user preferences, and context. The summary will replace these messages in the conversation history.";
-    
-    const apiKey = await getApiKey(config);
-    const response = await complete(
-      agent.state.model,
-      {
-        systemPrompt: summarySystemPrompt,
-        messages: [
+      // Advance the cut point past any leading toolResult messages so we never
+      // split a tool-use/tool-result pair across the compaction boundary.
+      let cutIndex = currentMessages.length - 20;
+      while (cutIndex < currentMessages.length && currentMessages[cutIndex].role === "toolResult") {
+        cutIndex++;
+      }
+
+      // If every message in the tail window is a toolResult, cutIndex has advanced
+      // past the end of the array. keepCount would be 0, causing OFFSET -1 in the
+      // SQL query, which is a PostgreSQL error. Skip compaction for this turn.
+      if (cutIndex >= currentMessages.length) {
+        console.warn("[stavrobot] Compaction skipped: all tail messages are toolResult, no safe cut point found.");
+      } else {
+        const messagesToCompact = currentMessages.slice(0, cutIndex);
+        const messagesToKeep = currentMessages.slice(cutIndex);
+
+        const serializedMessages = serializeMessagesForSummary(messagesToCompact);
+        const summarySystemPrompt = "Summarize the following conversation concisely. Preserve all important facts, decisions, user preferences, and context. The summary will replace these messages in the conversation history.";
+        
+        const apiKey = await getApiKey(config);
+        const response = await complete(
+          agent.state.model,
           {
-            role: "user" as const,
-            content: serializedMessages,
-            timestamp: Date.now(),
+            systemPrompt: summarySystemPrompt,
+            messages: [
+              {
+                role: "user" as const,
+                content: serializedMessages,
+                timestamp: Date.now(),
+              },
+            ],
           },
-        ],
-      },
-      { apiKey }
-    );
+          { apiKey }
+        );
 
-    const summaryText = response.content
-      .filter((block): block is TextContent => block.type === "text")
-      .map((block) => block.text)
-      .join("");
+        const summaryText = response.content
+          .filter((block): block is TextContent => block.type === "text")
+          .map((block) => block.text)
+          .join("");
 
-    const previousCompaction = await loadLatestCompaction(pool);
-    const previousBoundary = previousCompaction ? previousCompaction.upToMessageId : 0;
-    
-    const cutoffResult = await pool.query(
-      "SELECT id FROM messages WHERE id > $1 ORDER BY id DESC LIMIT 1 OFFSET 19",
-      [previousBoundary]
-    );
-    const upToMessageId = cutoffResult.rows[0].id as number;
+        const previousCompaction = await loadLatestCompaction(pool);
+        const previousBoundary = previousCompaction ? previousCompaction.upToMessageId : 0;
 
-    await saveCompaction(pool, summaryText, upToMessageId);
+        // The offset must match the number of messages we are keeping so that the
+        // DB boundary aligns with the in-memory cut point.
+        const keepCount = messagesToKeep.length;
+        const cutoffResult = await pool.query(
+          `SELECT id FROM messages WHERE id > $1 ORDER BY id DESC LIMIT 1 OFFSET ${keepCount - 1}`,
+          [previousBoundary]
+        );
+        const upToMessageId = cutoffResult.rows[0].id as number;
 
-    const syntheticMessage: AgentMessage = {
-      role: "user",
-      content: [{ type: "text", text: `[Summary of earlier conversation]\n${summaryText}` }],
-      timestamp: Date.now(),
-    };
+        await saveCompaction(pool, summaryText, upToMessageId);
 
-    const newMessages = [syntheticMessage, ...messagesToKeep];
-    agent.replaceMessages(newMessages);
-    console.log(`[stavrobot] Compacted ${messagesToCompact.length} messages into summary, kept ${messagesToKeep.length} recent messages.`);
+        const syntheticMessage: AgentMessage = {
+          role: "user",
+          content: [{ type: "text", text: `[Summary of earlier conversation]\n${summaryText}` }],
+          timestamp: Date.now(),
+        };
+
+        const newMessages = [syntheticMessage, ...messagesToKeep];
+        agent.replaceMessages(newMessages);
+        console.log(`[stavrobot] Compacted ${messagesToCompact.length} messages into summary, kept ${messagesToKeep.length} recent messages.`);
+      }
+    } finally {
+      compactionInProgress = false;
+    }
   }
 
   const lastAssistantMessage = agent.state.messages
