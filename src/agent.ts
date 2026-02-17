@@ -459,7 +459,12 @@ export async function handlePrompt(
     ];
     
     for (const memory of memories) {
-      memoryLines.push(`[Memory ${memory.id}]`);
+      const created = memory.createdAt.toISOString();
+      const updated = memory.updatedAt.toISOString();
+      const timestamp = created === updated
+        ? `created ${created}`
+        : `created ${created}, updated ${updated}`;
+      memoryLines.push(`[Memory ${memory.id}] (${timestamp})`);
       memoryLines.push(memory.content);
       memoryLines.push("");
     }

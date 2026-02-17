@@ -28,9 +28,15 @@ export async function initializeMemoriesSchema(pool: pg.Pool): Promise<void> {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS memories (
       id SERIAL PRIMARY KEY,
-      content TEXT NOT NULL
+      content TEXT NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
   `);
+
+  // Backfill existing tables that predate the timestamp columns.
+  await pool.query(`ALTER TABLE memories ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()`);
+  await pool.query(`ALTER TABLE memories ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()`);
 }
 
 export async function initializeCompactionsSchema(pool: pg.Pool): Promise<void> {
@@ -47,13 +53,17 @@ export async function initializeCompactionsSchema(pool: pg.Pool): Promise<void> 
 export interface Memory {
   id: number;
   content: string;
+  createdAt: Date;
+  updatedAt: Date;
 }
 
 export async function loadAllMemories(pool: pg.Pool): Promise<Memory[]> {
-  const result = await pool.query("SELECT id, content FROM memories ORDER BY id");
+  const result = await pool.query("SELECT id, content, created_at, updated_at FROM memories ORDER BY created_at");
   return result.rows.map((row) => ({
     id: row.id as number,
     content: row.content as string,
+    createdAt: row.created_at as Date,
+    updatedAt: row.updated_at as Date,
   }));
 }
 
@@ -66,7 +76,7 @@ export async function upsertMemory(pool: pg.Pool, id: number | undefined, conten
     return result.rows[0].id as number;
   } else {
     await pool.query(
-      "UPDATE memories SET content = $1 WHERE id = $2",
+      "UPDATE memories SET content = $1, updated_at = NOW() WHERE id = $2",
       [content, id]
     );
     return id;
