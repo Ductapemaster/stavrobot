@@ -1,12 +1,27 @@
 import http from "http";
 import fs from "fs";
 import path from "path";
-import { spawn } from "child_process";
+import { execSync, spawn } from "child_process";
 import { loadCoderConfig } from "./config.js";
 import { handleCodingTask } from "./coder.js";
 
 const TOOLS_DIR = "/tools";
 const TOOL_TIMEOUT_MS = 30_000;
+
+let toolRunnerUid: number | undefined;
+let toolRunnerGid: number | undefined;
+
+function getToolRunnerIds(): { uid: number; gid: number } {
+  if (toolRunnerUid === undefined || toolRunnerGid === undefined) {
+    try {
+      toolRunnerUid = parseInt(execSync("id -u toolrunner").toString().trim(), 10);
+      toolRunnerGid = parseInt(execSync("id -g toolrunner").toString().trim(), 10);
+    } catch {
+      throw new Error("toolrunner user not found — requires the Docker container environment");
+    }
+  }
+  return { uid: toolRunnerUid, gid: toolRunnerGid };
+}
 
 interface ToolManifest {
   name: string;
@@ -88,8 +103,19 @@ async function handleRunTool(
 
   const entrypoint = path.join(toolDir, manifest.entrypoint);
 
+  const { uid, gid } = getToolRunnerIds();
+
   await new Promise<void>((resolve) => {
-    const child = spawn(entrypoint, [], { cwd: toolDir });
+    const child = spawn(entrypoint, [], {
+      cwd: toolDir,
+      uid,
+      gid,
+      env: {
+        PATH: process.env.PATH,
+        UV_CACHE_DIR: "/tmp/uv-cache",
+        UV_PYTHON_INSTALL_DIR: "/opt/uv/python",
+      },
+    });
 
     let stdout = "";
     let stderr = "";

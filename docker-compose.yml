@@ -31,7 +31,7 @@ services:
     environment:
       TZ: Europe/Athens
     volumes:
-      - ./data/main/config.toml:/app/config.toml:ro
+      - ./data/main/config.toml:/app/config.toml
       - ./data/app:/app/data
       - ./data/tools:/tools
     depends_on:

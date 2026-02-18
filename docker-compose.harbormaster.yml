@@ -8,7 +8,7 @@ services:
       - {{ HM_DATA_DIR }}/app:/app/data
   coder:
     volumes:
-      - {{ HM_DATA_DIR }}/main/config.toml:/app/config.toml:ro
+      - {{ HM_DATA_DIR }}/main/config.toml:/app/config.toml
       - {{ HM_DATA_DIR }}/app:/app/data
       - {{ HM_DATA_DIR }}/tools:/tools
   signal-bridge:
