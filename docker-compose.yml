@@ -5,6 +5,7 @@ services:
       POSTGRES_DB: stavrobot
       POSTGRES_USER: stavrobot
       POSTGRES_PASSWORD: stavrobot
+    restart: unless-stopped
     healthcheck:
       test: ["CMD", "pg_isready", "-U", "stavrobot", "-d", "stavrobot"]
       interval: 2s
@@ -19,6 +20,7 @@ services:
       - "10567:3000"
     environment:
       TZ: Europe/Athens
+    restart: unless-stopped
     volumes:
       - ./data/main/config.toml:/app/config.toml
       - ./data/app:/app/data
@@ -30,6 +32,7 @@ services:
     build: ./coder
     environment:
       TZ: Europe/Athens
+    restart: unless-stopped
     volumes:
       - ./data/main/config.toml:/app/config.toml
       - ./data/app:/app/data

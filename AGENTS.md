@@ -166,6 +166,10 @@ The Python code (`client.py`) is a standalone CLI client with no third-party dep
 - The LLM agent library used in this project is from the Pi mono repo. The Context7
   library ID is `/badlogic/pi-mono`.
 
+## Deployment model
+
+- This is a single-user bot. One person chats with it at a time.
+
 ## General rules
 
 - Do not write forgiving code. Let errors propagate rather than silently catching them.
