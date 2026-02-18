@@ -11,6 +11,7 @@ import { reloadScheduler } from "./scheduler.js";
 import { createWebSearchTool } from "./web-search.js";
 import { createWebFetchTool } from "./web-fetch.js";
 import { createListToolsTool, createShowToolTool, createRunToolTool, createRequestCodingTaskTool } from "./coder-tools.js";
+import { createRunPythonTool } from "./python.js";
 
 // A simple boolean flag to prevent concurrent compaction runs. If a compaction
 // is already in progress when another request triggers the threshold, we skip
@@ -362,7 +363,7 @@ export function createManageCronTool(pool: pg.Pool): AgentTool {
 export async function createAgent(config: Config, pool: pg.Pool): Promise<Agent> {
   const model = getModel(config.provider as any, config.model as any);
   const messages = await loadMessages(pool);
-  const tools = [createExecuteSqlTool(pool), createUpdateMemoryTool(pool), createDeleteMemoryTool(pool), createSendSignalMessageTool(), createManageCronTool(pool)];
+  const tools = [createExecuteSqlTool(pool), createUpdateMemoryTool(pool), createDeleteMemoryTool(pool), createSendSignalMessageTool(), createManageCronTool(pool), createRunPythonTool()];
   if (config.webSearch !== undefined) {
     tools.push(createWebSearchTool(config.webSearch));
   }
