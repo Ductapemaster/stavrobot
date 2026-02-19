@@ -14,6 +14,8 @@ import { createWebFetchTool } from "./web-fetch.js";
 import { createListToolsTool, createShowToolTool, createRunToolTool, createRequestCodingTaskTool } from "./coder-tools.js";
 import { createRunPythonTool } from "./python.js";
 import { convertMarkdownToTelegramHtml } from "./telegram.js";
+import { sendSignalMessage } from "./signal.js";
+import { sendTelegramMessage } from "./telegram-api.js";
 
 // A simple boolean flag to prevent concurrent compaction runs. If a compaction
 // is already in progress when another request triggers the threshold, we skip
@@ -169,58 +171,69 @@ export function createSendSignalMessageTool(): AgentTool {
         };
       }
 
-      const body: {
-        recipient: string;
-        message?: string;
-        attachment?: string;
-        attachmentFilename?: string;
-      } = { recipient, message };
-
       if (attachmentPath !== undefined) {
         const fileBuffer = await fs.readFile(attachmentPath);
-        body.attachment = fileBuffer.toString("base64");
-        body.attachmentFilename = path.basename(attachmentPath);
+        const body: {
+          recipient: string;
+          message?: string;
+          attachment: string;
+          attachmentFilename: string;
+        } = {
+          recipient,
+          message,
+          attachment: fileBuffer.toString("base64"),
+          attachmentFilename: path.basename(attachmentPath),
+        };
+
         // Only delete files that were created in the OS temp directory to avoid
         // accidentally removing arbitrary files the agent was given access to.
         if (attachmentPath.startsWith(os.tmpdir())) {
           await fs.unlink(attachmentPath);
         }
-      }
 
-      const response = await fetch("http://signal-bridge:8081/send", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
+        const response = await fetch("http://signal-bridge:8081/send", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
 
-      const responseText = await response.text();
+        const responseText = await response.text();
 
-      if (!response.ok) {
-        let errorMessage = responseText;
+        if (!response.ok) {
+          let errorMessage = responseText;
+          try {
+            const parsed = JSON.parse(responseText) as unknown;
+            if (typeof parsed === "object" && parsed !== null && "error" in parsed && typeof (parsed as { error: unknown }).error === "string") {
+              errorMessage = (parsed as { error: string }).error;
+            }
+          } catch {
+            // Fall back to raw text if JSON parsing fails.
+          }
+          throw new Error(`Signal bridge error ${response.status}: ${errorMessage}`);
+        }
+
         try {
           const parsed = JSON.parse(responseText) as unknown;
-          if (typeof parsed === "object" && parsed !== null && "error" in parsed && typeof (parsed as { error: unknown }).error === "string") {
-            errorMessage = (parsed as { error: string }).error;
+          if (typeof parsed !== "object" || parsed === null || !("ok" in parsed) || (parsed as { ok: unknown }).ok !== true) {
+            throw new Error(`Signal bridge returned unexpected response: ${responseText}`);
           }
-        } catch {
-          // Fall back to raw text if JSON parsing fails.
+        } catch (parseError) {
+          if (parseError instanceof SyntaxError) {
+            throw new Error(`Signal bridge returned non-JSON success response: ${responseText}`);
+          }
+          throw parseError;
         }
-        throw new Error(`Signal bridge error ${response.status}: ${errorMessage}`);
+
+        console.log("[stavrobot] send_signal_message bridge response status:", response.status);
+
+        const successMessage = "Message sent successfully.";
+        return {
+          content: [{ type: "text" as const, text: successMessage }],
+          details: { message: successMessage },
+        };
       }
 
-      try {
-        const parsed = JSON.parse(responseText) as unknown;
-        if (typeof parsed !== "object" || parsed === null || !("ok" in parsed) || (parsed as { ok: unknown }).ok !== true) {
-          throw new Error(`Signal bridge returned unexpected response: ${responseText}`);
-        }
-      } catch (parseError) {
-        if (parseError instanceof SyntaxError) {
-          throw new Error(`Signal bridge returned non-JSON success response: ${responseText}`);
-        }
-        throw parseError;
-      }
-
-      console.log("[stavrobot] send_signal_message bridge response status:", response.status);
+      await sendSignalMessage(recipient, message as string);
 
       const successMessage = "Message sent successfully.";
       return {
@@ -310,16 +323,10 @@ export function createSendTelegramMessageTool(config: TelegramConfig): AgentTool
 
       // Text-only path: convert markdown to Telegram HTML and call sendMessage.
       const htmlText = await convertMarkdownToTelegramHtml(message as string);
-      const response = await fetch(`${baseUrl}/sendMessage`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ chat_id: recipient, text: htmlText, parse_mode: "HTML" }),
-      });
-
-      if (!response.ok) {
-        const errorBody = await response.json() as { description?: string };
-        const description = errorBody.description ?? "unknown error";
-        const errorMessage = `Error: Telegram API error ${response.status}: ${description}`;
+      try {
+        await sendTelegramMessage(config.botToken, recipient, htmlText);
+      } catch (error) {
+        const errorMessage = `Error: ${error instanceof Error ? error.message : String(error)}`;
         console.error("[stavrobot] send_telegram_message sendMessage error:", errorMessage);
         return {
           content: [{ type: "text" as const, text: errorMessage }],
@@ -327,7 +334,6 @@ export function createSendTelegramMessageTool(config: TelegramConfig): AgentTool
         };
       }
 
-      console.log("[stavrobot] send_telegram_message sendMessage response status:", response.status);
       const successMessage = "Message sent successfully.";
       return {
         content: [{ type: "text" as const, text: successMessage }],
@@ -632,6 +638,13 @@ export async function handlePrompt(
   const messageToSend = formatUserMessage(resolvedMessage ?? "", source, sender);
 
   console.log("[stavrobot] Sending message to agent:", messageToSend);
+
+  // The Pi agent loop's getApiKey callback runs inside an async context where thrown
+  // errors become unhandled promise rejections that crash Node rather than propagating
+  // through the stream's async iterator. By checking auth here before entering the agent
+  // loop, we ensure AuthError propagates cleanly to the queue's error handler. This does
+  // not cover the rare case where a token expires mid-conversation between tool calls.
+  await getApiKey(config);
 
   try {
     await agent.prompt(messageToSend);

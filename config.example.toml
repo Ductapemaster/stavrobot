@@ -6,8 +6,13 @@ model = "claude-sonnet-4-20250514"
 # authFile: path to an auth.json with OAuth credentials (for Claude Pro/Max
 #   subscriptions). Generate it by running `npx @mariozechner/pi-coding-agent`,
 #   then using the /login command and choosing "Anthropic".
-apiKey = "your-api-key-here"
-# authFile = "/path/to/auth.json"
+# apiKey = "your-api-key-here"
+authFile = "/app/data/auth.json"
+
+
+# The public HTTPS URL where this server is reachable (no trailing slash).
+# Required when authFile is set. Also used to register the Telegram webhook.
+publicHostname = "https://example.com"
 
 # The system prompt is injected at the start of every conversation. Customize
 # it to change the agent's personality, capabilities, and behavior.
@@ -50,12 +55,10 @@ allowedNumbers = ["+1234567890"]
 
 # Telegram integration. Create a bot via @BotFather on Telegram to get a token.
 # To find your chat ID, message @userinfobot on Telegram.
-# webhookHost is the public HTTPS URL where this server is reachable (include
-# port if not 443). The app registers a webhook at <webhookHost>/telegram/webhook
-# on startup.
+# The webhook is registered at <publicHostname>/telegram/webhook on startup.
+# publicHostname (top-level) must be set when using Telegram.
 [telegram]
 botToken = "123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11"
-webhookHost = "https://example.com"
 allowedChatIds = [123456789]
 
 # Text-to-speech configuration. Used by the text_to_speech tool.

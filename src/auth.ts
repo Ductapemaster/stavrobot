@@ -3,6 +3,13 @@ import type { OAuthCredentials } from "@mariozechner/pi-ai";
 import { getOAuthApiKey } from "@mariozechner/pi-ai";
 import type { Config } from "./config.js";
 
+export class AuthError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "AuthError";
+  }
+}
+
 type CredentialsMap = Record<string, OAuthCredentials>;
 
 const MAX_RETRIES = 3;
@@ -27,11 +34,19 @@ export async function getApiKey(config: Config): Promise<string> {
   let lastError: unknown;
   for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
     try {
-      const credentials = JSON.parse(fs.readFileSync(authFile, "utf-8")) as CredentialsMap;
+      let credentials: CredentialsMap;
+      try {
+        credentials = JSON.parse(fs.readFileSync(authFile, "utf-8")) as CredentialsMap;
+      } catch (readError) {
+        if (readError instanceof Error && (readError as NodeJS.ErrnoException).code === "ENOENT") {
+          throw new AuthError("Auth file not found. Login required.");
+        }
+        throw readError;
+      }
 
       const result = await getOAuthApiKey(config.provider, credentials);
       if (result === null) {
-        throw new Error(`No OAuth credentials found for provider "${config.provider}" in ${authFile}. Run the Pi coding agent /login command to authenticate.`);
+        throw new AuthError(`No OAuth credentials found for provider "${config.provider}" in ${authFile}. Run the Pi coding agent /login command to authenticate.`);
       }
 
       credentials[config.provider] = result.newCredentials;
@@ -46,8 +61,8 @@ export async function getApiKey(config: Config): Promise<string> {
       lastError = error;
       const errorMessage = error instanceof Error ? error.message : String(error);
 
-      // Missing credentials is not a transient failure, no point retrying.
-      if (errorMessage.includes("No OAuth credentials found")) {
+      // Auth failures are not transient, no point retrying.
+      if (error instanceof AuthError) {
         throw error;
       }
 
@@ -58,5 +73,5 @@ export async function getApiKey(config: Config): Promise<string> {
   }
 
   const finalMessage = lastError instanceof Error ? lastError.message : String(lastError);
-  throw new Error(`OAuth token refresh failed after ${MAX_RETRIES} attempts: ${finalMessage}`);
+  throw new AuthError(`OAuth token refresh failed after ${MAX_RETRIES} attempts: ${finalMessage}`);
 }

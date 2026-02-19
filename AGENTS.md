@@ -170,6 +170,14 @@ The Python code (`client.py`) is a standalone CLI client with no third-party dep
 
 - This is a single-user bot. One person chats with it at a time.
 
+## Library boundaries
+
+- Never rely on undocumented or internal behaviour of third-party libraries (e.g.,
+  reading private fields, depending on internal error propagation paths, importing from
+  `dist/` subpaths that aren't part of the public API).
+- When a workaround requires reaching into library internals, flag it explicitly and
+  discuss with the user before proceeding. Document the dependency clearly in a comment.
+
 ## General rules
 
 - Do not write forgiving code. Let errors propagate rather than silently catching them.

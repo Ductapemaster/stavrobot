@@ -138,8 +138,8 @@ function isTelegramMessage(value: unknown): value is TelegramMessage {
   );
 }
 
-export async function registerTelegramWebhook(config: TelegramConfig): Promise<void> {
-  const webhookUrl = `${config.webhookHost}/telegram/webhook`;
+export async function registerTelegramWebhook(config: TelegramConfig, publicHostname: string): Promise<void> {
+  const webhookUrl = `${publicHostname}/telegram/webhook`;
   console.log("[stavrobot] Registering Telegram webhook:", webhookUrl);
 
   const response = await fetch(

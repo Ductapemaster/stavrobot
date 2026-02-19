@@ -6,6 +6,7 @@ import { initializeQueue, enqueueMessage } from "./queue.js";
 import { initializeScheduler } from "./scheduler.js";
 import type { TelegramConfig } from "./config.js";
 import { registerTelegramWebhook, handleTelegramWebhook } from "./telegram.js";
+import { serveLoginPage, handleLoginPost } from "./login.js";
 
 async function readRequestBody(request: http.IncomingMessage): Promise<string> {
   const chunks: Buffer[] = [];
@@ -120,7 +121,10 @@ async function main(): Promise<void> {
   await initializeScheduler(pool);
 
   if (config.telegram !== undefined) {
-    await registerTelegramWebhook(config.telegram);
+    if (config.publicHostname === undefined) {
+      throw new Error("Config must specify publicHostname when telegram is configured.");
+    }
+    await registerTelegramWebhook(config.telegram, config.publicHostname);
   }
 
   const server = http.createServer((request: http.IncomingMessage, response: http.ServerResponse): void => {
@@ -128,6 +132,10 @@ async function main(): Promise<void> {
       handleChatRequest(request, response);
     } else if (request.method === "POST" && request.url === "/telegram/webhook") {
       handleTelegramWebhookRequest(request, response, config.telegram);
+    } else if (request.method === "GET" && request.url === "/providers/anthropic/login") {
+      serveLoginPage(response);
+    } else if (request.method === "POST" && request.url === "/providers/anthropic/login") {
+      void handleLoginPost(request, response, config);
     } else {
       response.writeHead(404, { "Content-Type": "application/json" });
       response.end(JSON.stringify({ error: "Not found" }));
