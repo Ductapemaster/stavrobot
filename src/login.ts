@@ -15,10 +15,44 @@ const LOGIN_PAGE_HTML = `<!DOCTYPE html>
   <meta charset="UTF-8">
   <title>Log in with Anthropic</title>
   <style>
-    body { font-family: sans-serif; max-width: 600px; margin: 40px auto; padding: 0 16px; }
-    input { width: 100%; box-sizing: border-box; padding: 8px; margin: 8px 0; font-size: 1em; }
-    button { padding: 8px 16px; font-size: 1em; cursor: pointer; }
-    #status { margin-top: 16px; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      max-width: 440px;
+      margin: 80px auto;
+      padding: 0 24px;
+      color: #1a1a1a;
+      line-height: 1.5;
+    }
+    h1 {
+      font-size: 1.5em;
+      font-weight: 600;
+      margin-bottom: 24px;
+    }
+    p { color: #666; margin-bottom: 16px; }
+    a { color: #d97706; text-decoration: none; font-weight: 500; }
+    a:hover { text-decoration: underline; }
+    input {
+      width: 100%;
+      box-sizing: border-box;
+      padding: 12px;
+      margin: 8px 0 16px;
+      font-size: 1em;
+      border: 1px solid #ccc;
+      border-radius: 6px;
+    }
+    input:focus { outline: none; border-color: #d97706; }
+    button {
+      padding: 12px 24px;
+      font-size: 1em;
+      cursor: pointer;
+      background: #d97706;
+      color: #fff;
+      border: none;
+      border-radius: 6px;
+      font-weight: 500;
+    }
+    button:hover { background: #b45309; }
+    #status { margin-top: 20px; color: #666; }
   </style>
 </head>
 <body>
