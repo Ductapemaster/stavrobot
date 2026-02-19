@@ -608,19 +608,6 @@ export async function handlePrompt(
 
   const savePromises: Promise<void>[] = [];
 
-  const unsubscribe = agent.subscribe((event) => {
-    if (event.type === "message_end") {
-      const message = event.message;
-      if (
-        message.role === "user" ||
-        message.role === "assistant" ||
-        message.role === "toolResult"
-      ) {
-        savePromises.push(saveMessage(pool, message));
-      }
-    }
-  });
-
   let resolvedMessage = userMessage;
 
   if (audio !== undefined) {
@@ -645,6 +632,19 @@ export async function handlePrompt(
   // loop, we ensure AuthError propagates cleanly to the queue's error handler. This does
   // not cover the rare case where a token expires mid-conversation between tool calls.
   await getApiKey(config);
+
+  const unsubscribe = agent.subscribe((event) => {
+    if (event.type === "message_end") {
+      const message = event.message;
+      if (
+        message.role === "user" ||
+        message.role === "assistant" ||
+        message.role === "toolResult"
+      ) {
+        savePromises.push(saveMessage(pool, message));
+      }
+    }
+  });
 
   try {
     await agent.prompt(messageToSend);
