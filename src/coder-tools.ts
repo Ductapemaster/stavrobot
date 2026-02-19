@@ -1,7 +1,8 @@
 import { Type } from "@mariozechner/pi-ai";
 import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
 
-const CODER_BASE_URL = "http://coder:3001";
+const TOOL_RUNNER_BASE_URL = "http://coder:3001";
+const CLAUDE_CODE_BASE_URL = "http://claude-code:3002";
 
 export function createListToolsTool(): AgentTool {
   return {
@@ -14,7 +15,7 @@ export function createListToolsTool(): AgentTool {
       params: unknown,
     ): Promise<AgentToolResult<{ result: string }>> => {
       console.log("[stavrobot] list_tools called");
-      const response = await fetch(`${CODER_BASE_URL}/tools`);
+      const response = await fetch(`${TOOL_RUNNER_BASE_URL}/tools`);
       const result = await response.text();
       console.log("[stavrobot] list_tools result:", result.length, "characters");
       return {
@@ -39,7 +40,7 @@ export function createShowToolTool(): AgentTool {
     ): Promise<AgentToolResult<{ result: string }>> => {
       const { name } = params as { name: string };
       console.log("[stavrobot] show_tool called:", name);
-      const response = await fetch(`${CODER_BASE_URL}/tools/${name}`);
+      const response = await fetch(`${TOOL_RUNNER_BASE_URL}/tools/${name}`);
       if (response.status === 404) {
         const result = `Tool '${name}' not found.`;
         return {
@@ -73,7 +74,7 @@ export function createRunToolTool(): AgentTool {
       const { name, parameters } = params as { name: string; parameters: string };
       console.log("[stavrobot] run_tool called:", name, "parameters:", parameters);
       const parsedParameters = JSON.parse(parameters) as unknown;
-      const response = await fetch(`${CODER_BASE_URL}/tools/${name}/run`, {
+      const response = await fetch(`${TOOL_RUNNER_BASE_URL}/tools/${name}/run`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(parsedParameters),
@@ -103,7 +104,7 @@ export function createRequestCodingTaskTool(): AgentTool {
       const { message } = params as { message: string };
       const taskId = crypto.randomUUID();
       console.log("[stavrobot] request_coding_task called: taskId", taskId, "message:", message);
-      await fetch(`${CODER_BASE_URL}/code`, {
+      await fetch(`${CLAUDE_CODE_BASE_URL}/code`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ taskId, message }),

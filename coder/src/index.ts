@@ -2,8 +2,6 @@ import http from "http";
 import fs from "fs";
 import path from "path";
 import { execSync, spawn } from "child_process";
-import { loadCoderConfig } from "./config.js";
-import { handleCodingTask } from "./coder.js";
 
 const TOOLS_DIR = "/tools";
 const TOOL_TIMEOUT_MS = 30_000;
@@ -179,46 +177,9 @@ async function handleRunTool(
   });
 }
 
-async function handleCodeRequest(
-  request: http.IncomingMessage,
-  response: http.ServerResponse,
-  config: ReturnType<typeof loadCoderConfig>,
-): Promise<void> {
-  const body = await readRequestBody(request);
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(body);
-  } catch {
-    response.writeHead(400, { "Content-Type": "application/json" });
-    response.end(JSON.stringify({ error: "Invalid JSON body" }));
-    return;
-  }
-
-  if (
-    typeof parsed !== "object" ||
-    parsed === null ||
-    typeof (parsed as Record<string, unknown>)["taskId"] !== "string" ||
-    typeof (parsed as Record<string, unknown>)["message"] !== "string"
-  ) {
-    response.writeHead(400, { "Content-Type": "application/json" });
-    response.end(JSON.stringify({ error: "Missing required fields: taskId, message" }));
-    return;
-  }
-
-  const { taskId, message } = parsed as { taskId: string; message: string };
-
-  handleCodingTask(taskId, message, config).catch((error) => {
-    console.error(`[stavrobot-coder] Unhandled error in coding task ${taskId}:`, error);
-  });
-
-  response.writeHead(202, { "Content-Type": "application/json" });
-  response.end(JSON.stringify({ taskId }));
-}
-
 async function handleRequest(
   request: http.IncomingMessage,
   response: http.ServerResponse,
-  config: ReturnType<typeof loadCoderConfig>,
 ): Promise<void> {
   const url = request.url ?? "/";
   const method = request.method ?? "GET";
@@ -243,11 +204,6 @@ async function handleRequest(
       return;
     }
 
-    if (method === "POST" && url === "/code") {
-      await handleCodeRequest(request, response, config);
-      return;
-    }
-
     response.writeHead(404, { "Content-Type": "application/json" });
     response.end(JSON.stringify({ error: "Not found" }));
   } catch (error) {
@@ -259,11 +215,8 @@ async function handleRequest(
 }
 
 async function main(): Promise<void> {
-  const config = loadCoderConfig();
-  console.log(`[stavrobot-coder] Starting with provider: ${config.provider}, model: ${config.coderModel}`);
-
   const server = http.createServer((request: http.IncomingMessage, response: http.ServerResponse): void => {
-    handleRequest(request, response, config);
+    handleRequest(request, response);
   });
 
   const port = process.env.PORT ? parseInt(process.env.PORT, 10) : 3001;

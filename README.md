@@ -19,7 +19,7 @@ A personal AI assistant with persistent memory, sandboxed code execution, and Si
 
 ## Architecture
 
-Four Docker containers: `app` (TypeScript server, exposes `POST /chat` on port 3000 and handles Telegram webhooks at `POST /telegram/webhook`), `postgres` (PostgreSQL 17 for persistent state), `signal-bridge` (Python daemon bridging Signal via signal-cli to the app), and `coder` (secondary LLM agent that creates custom tools on request).
+Five Docker containers: `app` (TypeScript server, exposes `POST /chat` on port 3000 and handles Telegram webhooks at `POST /telegram/webhook`), `postgres` (PostgreSQL 17 for persistent state), `signal-bridge` (Python daemon bridging Signal via signal-cli to the app), `coder` (Node.js tool runner — lists, inspects, and executes custom tools), and `claude-code` (Claude Code headless agent for creating custom tools).
 
 ## Setup
 
@@ -27,16 +27,16 @@ Four Docker containers: `app` (TypeScript server, exposes `POST /chat` on port 3
 
 1. Copy `config.example.toml` to `data/main/config.toml`.
 2. Fill in API keys and settings. The example file has comments explaining each section.
-3. At minimum, set `apiKey` (or `authFile`) and the `[postgres]` section. Everything else is optional.
+3. At minimum, set `apiKey` and the `[postgres]` section. Everything else is optional.
 
-### Pi auth file (OAuth alternative to API key)
+### Claude Code setup
 
-For Claude Pro/Max subscriptions, you can use OAuth instead of an API key:
+The `claude-code` container uses Claude Code with subscription auth (OAuth), separate from the main app's API key.
 
 1. Start the containers: `docker compose up --build`
-2. Exec into the coder container: `docker compose exec coder sh`
-3. Run `npx @mariozechner/pi-coding-agent`, then use the `/login` command and choose "Anthropic".
-4. This generates an `auth.json` file. Set `authFile` in your config to point to it instead of `apiKey`.
+2. Log in: `docker compose exec -u coder claude-code claude login`
+3. Follow the browser-based OAuth flow.
+4. Set `[coder].model` in your config to the desired model (e.g., `claude-sonnet-4-5-20250514`).
 
 ### Signal setup
 

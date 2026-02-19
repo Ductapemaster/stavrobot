@@ -8,8 +8,11 @@ services:
       - {{ HM_DATA_DIR }}/app:/app/data
   coder:
     volumes:
-      - {{ HM_DATA_DIR }}/main/config.toml:/app/config.toml
-      - {{ HM_DATA_DIR }}/app:/app/data
+      - {{ HM_DATA_DIR }}/tools:/tools
+  claude-code:
+    volumes:
+      - {{ HM_DATA_DIR }}/main:/config
+      - {{ HM_DATA_DIR }}/claude-code:/home/coder/.claude
       - {{ HM_DATA_DIR }}/tools:/tools
   signal-bridge:
     volumes:

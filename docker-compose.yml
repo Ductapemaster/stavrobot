@@ -42,8 +42,16 @@ services:
       TZ: Europe/Athens
     restart: unless-stopped
     volumes:
-      - ./data/main/config.toml:/app/config.toml
-      - ./data/app:/app/data
+      - ./data/tools:/tools
+
+  claude-code:
+    build: ./claude-code
+    environment:
+      TZ: Europe/Athens
+    restart: unless-stopped
+    volumes:
+      - ./data/main:/config
+      - ./data/claude-code:/home/coder/.claude
       - ./data/tools:/tools
     depends_on:
       app:

@@ -151,6 +151,12 @@ The Python code (`client.py`) is a standalone CLI client with no third-party dep
 - Never mount single files as Docker volumes. Mount entire directories instead and place
   the files inside them. Docker creates a directory with the file's name if the file
   doesn't exist on the host at container start time.
+- Secret isolation pattern for LLM containers: create the service user with UID 9999
+  (`useradd -m -u 9999 <user>`). Mount the config directory read-write. In the
+  entrypoint (running as root), `chmod 600` the config file so only root can read it,
+  extract the values the service needs into a separate file owned by the service user,
+  then exec the service process as that user. This way the LLM (which has shell access)
+  cannot read secrets from the config file.
 
 ## Version control
 
@@ -161,11 +167,34 @@ The Python code (`client.py`) is a standalone CLI client with no third-party dep
 - DO NOT REVERT ANY CHANGES. If you notice unrelated changes in the repo, pause and ask
   the user, as they might be changes the user has made.
 
+## Coder subsystem
+
+The self-programming feature is split across two containers:
+
+- **Tool runner (`coder/`):** Node.js HTTP server with no LLM. Serves tool metadata and
+  executes custom tools as the `toolrunner` user. Endpoints:
+  - `GET /tools` — list all tools
+  - `GET /tools/:name` — get tool manifest
+  - `POST /tools/:name/run` — execute a tool
+- **Claude Code container (`claude-code/`):** Python HTTP server that wraps the `claude`
+  headless binary. Receives coding tasks and runs them asynchronously, posting results
+  back to the main app via `POST /chat`. Endpoint:
+  - `POST /code` — submit a coding task (returns 202 immediately)
+
+The async workflow: main app sends `POST /code` to `claude-code` → `claude-code` spawns
+`claude -p` as a subprocess → on completion, posts result to `app:3000/chat` with
+`source: "coder"`.
+
+Configuration: the `claude-code` entrypoint (running as root) reads `config.toml`,
+extracts `password` and `[coder].model` into `/run/coder-env` (owned by the `coder`
+user, chmod 600), then execs the server as that user. The LLM process cannot read
+`config.toml` directly.
+
 ## Pi library versions
 
-- The main app (`package.json`) and the coder (`coder/package.json`) both depend on
-  packages from the Pi mono repo. Their Pi dependency versions must always match — if
-  one is updated, the other must be updated to the same version in the same change.
+- Only the main app (`package.json`) depends on packages from the Pi mono repo. The
+  coder no longer has Pi dependencies. When Pi package versions are updated, only the
+  main app's `package.json` needs to be kept in sync.
 
 ## Context7
 
