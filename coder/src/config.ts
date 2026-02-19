@@ -6,12 +6,14 @@ export interface CoderConfig {
   coderModel: string;
   apiKey?: string;
   authFile?: string;
+  password?: string;
 }
 
 interface RawConfig {
   provider: string;
   apiKey?: string;
   authFile?: string;
+  password?: string;
   coder?: {
     model: string;
   };
@@ -38,5 +40,6 @@ export function loadCoderConfig(): CoderConfig {
     coderModel: raw.coder.model,
     apiKey: raw.apiKey,
     authFile: raw.authFile,
+    password: raw.password,
   };
 }

@@ -95,9 +95,17 @@ export async function handleCodingTask(
   }
 
   console.log(`[stavrobot-coder] Posting result for task ${taskId} to app`);
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (config.password !== undefined) {
+    // HTTP Basic Auth: base64 encode "user:password" (username is ignored by the server).
+    const credentials = Buffer.from(`coder:${config.password}`).toString(
+      "base64",
+    );
+    headers["Authorization"] = `Basic ${credentials}`;
+  }
   const response = await fetch(APP_CHAT_URL, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers,
     body: JSON.stringify({
       message: resultText,
       source: "coder",

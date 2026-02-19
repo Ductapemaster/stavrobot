@@ -21,6 +21,9 @@ from datetime import datetime
 
 from markdown_to_signal import convert_markdown
 
+# Global password for authenticating with the main app. Loaded from config at startup.
+_app_password: str | None = None
+
 
 def log(message: str) -> None:
     """Log a message to stdout with timestamp."""
@@ -104,7 +107,11 @@ def send_agent_request(message_text: str | None, source_number: str, audio: str 
         if audio_content_type is not None:
             payload["audioContentType"] = audio_content_type
     body = json.dumps(payload)
-    headers = {"Content-Type": "application/json"}
+    headers: dict[str, str] = {"Content-Type": "application/json"}
+    if _app_password is not None:
+        # HTTP Basic Auth: base64 encode "user:password" (username is ignored by the server).
+        credentials = base64.b64encode(f"bridge:{_app_password}".encode()).decode()
+        headers["Authorization"] = f"Basic {credentials}"
     connection.request("POST", "/chat", body, headers)
     response = connection.getresponse()
     response_data = response.read()
@@ -431,9 +438,22 @@ def listen_to_sse_stream(
 
 def main() -> None:
     """Main entry point for the signal bridge."""
+    global _app_password
     log("Starting signal bridge...")
 
     config = load_config()
+
+    # Load password for authenticating with the main app's /chat endpoint.
+    password = config.get("password")
+    if password is not None and not isinstance(password, str):
+        log("Error: password must be a string in config.toml")
+        sys.exit(1)
+    _app_password = password
+    if _app_password is not None:
+        log("Password configured, will use Basic Auth for /chat requests")
+    else:
+        log("No password configured, /chat requests will not be authenticated")
+
     signal_config = config.get("signal", {})
     if not isinstance(signal_config, dict):
         log("Error: [signal] section must be a table in config.toml")
