@@ -47,6 +47,7 @@ export interface Config {
   apiKey?: string;
   authFile?: string;
   publicHostname?: string;
+  password?: string;
   systemPrompt: string;
   postgres: PostgresConfig;
   tts?: TtsConfig;

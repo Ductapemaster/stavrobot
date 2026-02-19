@@ -1,6 +1,11 @@
 provider = "anthropic"
 model = "claude-sonnet-4-20250514"
 
+# Password for HTTP Basic Auth. All endpoints except webhooks require this.
+# Change this to something secure. If removed or commented out, all endpoints
+# are open to the world.
+password = "change-me"
+
 # Authentication: use exactly one of apiKey or authFile.
 # apiKey: a static Anthropic API key.
 # authFile: path to an auth.json with OAuth credentials (for Claude Pro/Max

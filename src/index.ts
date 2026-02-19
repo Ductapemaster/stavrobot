@@ -14,6 +14,23 @@ import {
   handleTableRowsRequest,
 } from "./explorer.js";
 
+function isPublicRoute(method: string, pathname: string): boolean {
+  return method === "POST" && pathname === "/telegram/webhook";
+}
+
+function checkBasicAuth(request: http.IncomingMessage, password: string): boolean {
+  const authHeader = request.headers["authorization"];
+  if (authHeader === undefined || !authHeader.startsWith("Basic ")) {
+    return false;
+  }
+  const base64 = authHeader.slice("Basic ".length);
+  const decoded = Buffer.from(base64, "base64").toString();
+  // The Basic auth format is "username:password". We ignore the username.
+  const colonIndex = decoded.indexOf(":");
+  const providedPassword = colonIndex === -1 ? decoded : decoded.slice(colonIndex + 1);
+  return providedPassword === password;
+}
+
 async function readRequestBody(request: http.IncomingMessage): Promise<string> {
   const chunks: Buffer[] = [];
   for await (const chunk of request) {
@@ -136,6 +153,18 @@ async function main(): Promise<void> {
   const server = http.createServer((request: http.IncomingMessage, response: http.ServerResponse): void => {
     const url = new URL(request.url || "/", `http://${request.headers.host}`);
     const pathname = url.pathname;
+
+    if (config.password !== undefined && !isPublicRoute(request.method ?? "", pathname)) {
+      if (!checkBasicAuth(request, config.password)) {
+        console.log("[stavrobot] Unauthorized request:", request.method, pathname);
+        response.writeHead(401, {
+          "Content-Type": "application/json",
+          "WWW-Authenticate": `Basic realm="stavrobot"`,
+        });
+        response.end(JSON.stringify({ error: "Unauthorized" }));
+        return;
+      }
+    }
 
     if (request.method === "POST" && pathname === "/chat") {
       handleChatRequest(request, response);
