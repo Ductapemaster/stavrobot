@@ -132,6 +132,14 @@ async function handleRunTool(
       stderr += chunk.toString("utf-8");
     });
 
+    child.stdin.on("error", (error: Error) => {
+      // EPIPE means the child exited before reading stdin. This is not fatal
+      // since the child's exit handler will report the actual error.
+      if ((error as NodeJS.ErrnoException).code !== "EPIPE") {
+        console.error(`[stavrobot-coder] Tool ${toolName} stdin error: ${error.message}`);
+      }
+    });
+
     child.stdin.write(body);
     child.stdin.end();
 
