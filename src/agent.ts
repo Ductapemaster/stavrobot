@@ -1,10 +1,10 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import pg from "pg";
-import { Type, getModel, type TextContent, complete } from "@mariozechner/pi-ai";
+import { Type, getModel, type TextContent, type ImageContent, complete } from "@mariozechner/pi-ai";
 import { Agent, type AgentTool, type AgentToolResult, type AgentMessage } from "@mariozechner/pi-agent-core";
 import type { Config, TelegramConfig, TtsConfig } from "./config.js";
+import type { FileAttachment } from "./uploads.js";
 import { transcribeAudio } from "./stt.js";
 import { getApiKey } from "./auth.js";
 import { executeSql, loadMessages, saveMessage, saveCompaction, loadLatestCompaction, loadAllMemories, upsertMemory, deleteMemory, createCronEntry, updateCronEntry, deleteCronEntry, listCronEntries, type Memory } from "./database.js";
@@ -18,6 +18,11 @@ import { createReadUploadTool, createDeleteUploadTool } from "./upload-tools.js"
 import { convertMarkdownToTelegramHtml } from "./telegram.js";
 import { sendSignalMessage } from "./signal.js";
 import { sendTelegramMessage } from "./telegram-api.js";
+
+// Ephemeral files created by the agent (e.g. TTS output) are written here so
+// the send tools can identify them for auto-deletion without risking deletion
+// of user-uploaded files that also live under /tmp.
+export const TEMP_ATTACHMENTS_DIR = "/tmp/stavrobot-temp";
 
 // A simple boolean flag to prevent concurrent compaction runs. If a compaction
 // is already in progress when another request triggers the threshold, we skip
@@ -126,7 +131,8 @@ export function createTextToSpeechTool(ttsConfig: TtsConfig): AgentTool {
       }
 
       const audioBuffer = Buffer.from(await response.arrayBuffer());
-      const tempDirectory = await fs.mkdtemp(path.join(os.tmpdir(), "tts-"));
+      await fs.mkdir(TEMP_ATTACHMENTS_DIR, { recursive: true });
+      const tempDirectory = await fs.mkdtemp(path.join(TEMP_ATTACHMENTS_DIR, "tts-"));
       const filePath = path.join(tempDirectory, "audio.mp3");
       await fs.writeFile(filePath, audioBuffer);
 
@@ -187,9 +193,9 @@ export function createSendSignalMessageTool(): AgentTool {
           attachmentFilename: path.basename(attachmentPath),
         };
 
-        // Only delete files that were created in the OS temp directory to avoid
-        // accidentally removing arbitrary files the agent was given access to.
-        if (attachmentPath.startsWith(os.tmpdir())) {
+        // Only delete files that were created in the temp attachments directory
+        // to avoid accidentally removing arbitrary files the agent was given access to.
+        if (attachmentPath.startsWith(TEMP_ATTACHMENTS_DIR)) {
           await fs.unlink(attachmentPath);
         }
 
@@ -312,9 +318,9 @@ export function createSendTelegramMessageTool(config: TelegramConfig): AgentTool
           formData.append("parse_mode", "HTML");
         }
 
-        // Only delete files that were created in the OS temp directory to avoid
-        // accidentally removing arbitrary files the agent was given access to.
-        if (attachmentPath.startsWith(os.tmpdir())) {
+        // Only delete files that were created in the temp attachments directory
+        // to avoid accidentally removing arbitrary files the agent was given access to.
+        if (attachmentPath.startsWith(TEMP_ATTACHMENTS_DIR)) {
           await fs.unlink(attachmentPath);
         }
 
@@ -602,7 +608,8 @@ export async function handlePrompt(
   source?: string,
   sender?: string,
   audio?: string,
-  audioContentType?: string
+  audioContentType?: string,
+  attachments?: FileAttachment[]
 ): Promise<string> {
   const memories = await loadAllMemories(pool);
 
@@ -651,6 +658,29 @@ export async function handlePrompt(
     }
   }
 
+  const imageContents: ImageContent[] = [];
+
+  if (attachments !== undefined && attachments.length > 0) {
+    for (const attachment of attachments) {
+      const isImage = attachment.mimeType.startsWith("image/");
+      const notification =
+        `A file was received.\n` +
+        `Original filename: ${attachment.originalFilename}\n` +
+        `Stored at: ${attachment.storedPath}\n` +
+        `MIME type: ${attachment.mimeType}\n` +
+        `Size: ${attachment.size} bytes\n\n` +
+        `If this is an image, it is already included below. Otherwise, you do not need to read it right now. ` +
+        `If you need to read it, use the read_upload tool. ` +
+        `You shouldn't need to delete it, but if you do, you can use the delete_upload tool.`;
+      resolvedMessage = resolvedMessage !== undefined ? `${resolvedMessage}\n\n${notification}` : notification;
+
+      if (isImage) {
+        const fileData = await fs.readFile(attachment.storedPath);
+        imageContents.push({ type: "image", data: fileData.toString("base64"), mimeType: attachment.mimeType });
+      }
+    }
+  }
+
   const messageToSend = formatUserMessage(resolvedMessage ?? "", source, sender);
 
   console.log("[stavrobot] Sending message to agent:", messageToSend);
@@ -676,7 +706,11 @@ export async function handlePrompt(
   });
 
   try {
-    await agent.prompt(messageToSend);
+    if (imageContents.length > 0) {
+      await agent.prompt(messageToSend, imageContents);
+    } else {
+      await agent.prompt(messageToSend);
+    }
   } finally {
     unsubscribe();
     await Promise.all(savePromises);

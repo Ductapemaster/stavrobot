@@ -5,6 +5,7 @@ import { handlePrompt } from "./agent.js";
 import { AuthError } from "./auth.js";
 import { sendSignalMessage } from "./signal.js";
 import { sendTelegramMessage } from "./telegram-api.js";
+import type { FileAttachment } from "./uploads.js";
 
 const MAX_RETRIES = 3;
 const RETRY_DELAY_MS = 30_000;
@@ -15,6 +16,7 @@ interface QueueEntry {
   sender: string | undefined;
   audio: string | undefined;
   audioContentType: string | undefined;
+  attachments: FileAttachment[] | undefined;
   retries: number;
   resolve: (value: string) => void;
   reject: (reason: unknown) => void;
@@ -42,7 +44,7 @@ async function processQueue(): Promise<void> {
   while (queue.length > 0) {
     const entry = queue.shift()!;
     try {
-      const response = await handlePrompt(queueAgent!, queuePool!, entry.message, queueConfig!, entry.source, entry.sender, entry.audio, entry.audioContentType);
+      const response = await handlePrompt(queueAgent!, queuePool!, entry.message, queueConfig!, entry.source, entry.sender, entry.audio, entry.audioContentType, entry.attachments);
       entry.resolve(response);
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
@@ -77,9 +79,9 @@ async function processQueue(): Promise<void> {
   processing = false;
 }
 
-export function enqueueMessage(message: string | undefined, source?: string, sender?: string, audio?: string, audioContentType?: string): Promise<string> {
+export function enqueueMessage(message: string | undefined, source?: string, sender?: string, audio?: string, audioContentType?: string, attachments?: FileAttachment[]): Promise<string> {
   return new Promise<string>((resolve, reject) => {
-    queue.push({ message, source, sender, audio, audioContentType, retries: 0, resolve, reject });
+    queue.push({ message, source, sender, audio, audioContentType, attachments, retries: 0, resolve, reject });
     if (!processing) {
       void processQueue();
     }

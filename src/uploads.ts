@@ -5,19 +5,45 @@ import crypto from "crypto";
 import busboy from "busboy";
 import { enqueueMessage } from "./queue.js";
 
+// Files are stored in /tmp/uploads inside the container with no volume mount,
+// so they are lost on container restart. Persistent storage is future work.
 export const UPLOADS_DIR = "/tmp/uploads";
+
+export interface FileAttachment {
+  storedPath: string;
+  originalFilename: string;
+  mimeType: string;
+  size: number;
+}
+
+export async function saveAttachment(
+  data: Buffer,
+  originalFilename: string,
+  mimeType: string,
+): Promise<{ storedPath: string; storedFilename: string }> {
+  await fs.promises.mkdir(UPLOADS_DIR, { recursive: true });
+
+  const extension = path.extname(originalFilename);
+  const storedFilename = `upload-${crypto.randomUUID()}${extension}`;
+  const storedPath = path.join(UPLOADS_DIR, storedFilename);
+
+  console.log("[stavrobot] Saving attachment to:", storedPath, "mimeType:", mimeType);
+
+  await fs.promises.writeFile(storedPath, data);
+
+  return { storedPath, storedFilename };
+}
 
 export async function handleUploadRequest(
   request: http.IncomingMessage,
   response: http.ServerResponse,
 ): Promise<void> {
   try {
-    await fs.promises.mkdir(UPLOADS_DIR, { recursive: true });
-
     const bb = busboy({ headers: request.headers });
 
     let originalFilename: string | undefined;
     let storedFilename: string | undefined;
+    let storedPath: string | undefined;
     let mimeType: string | undefined;
     let fileSize = 0;
     let fileFieldSeen = false;
@@ -46,26 +72,27 @@ export async function handleUploadRequest(
         fileFieldSeen = true;
         mimeType = info.mimeType;
 
-        const extension = path.extname(info.filename);
-        const randomName = `upload-${crypto.randomUUID()}${extension}`;
-        storedFilename = randomName;
-        const filePath = path.join(UPLOADS_DIR, randomName);
-
-        console.log("[stavrobot] Saving upload to:", filePath, "mimeType:", mimeType);
-
-        const writeStream = fs.createWriteStream(filePath);
+        const chunks: Buffer[] = [];
 
         fileStream.on("data", (chunk: Buffer) => {
           fileSize += chunk.length;
+          chunks.push(chunk);
         });
 
-        fileStream.pipe(writeStream);
+        fileStream.on("end", () => {
+          const data = Buffer.concat(chunks);
+          const effectiveMimeType = mimeType ?? "application/octet-stream";
 
-        writeStream.on("finish", () => {
-          writeFinished = true;
-          maybeResolve();
+          saveAttachment(data, info.filename, effectiveMimeType)
+            .then((result) => {
+              storedFilename = result.storedFilename;
+              storedPath = result.storedPath;
+              writeFinished = true;
+              maybeResolve();
+            })
+            .catch(reject);
         });
-        writeStream.on("error", reject);
+
         fileStream.on("error", reject);
       });
 
@@ -93,7 +120,7 @@ export async function handleUploadRequest(
 
     await fileWritePromise;
 
-    if (!fileFieldSeen || storedFilename === undefined) {
+    if (!fileFieldSeen || storedFilename === undefined || storedPath === undefined) {
       response.writeHead(400, { "Content-Type": "application/json" });
       response.end(JSON.stringify({ error: "Missing required 'file' field" }));
       return;
@@ -102,19 +129,17 @@ export async function handleUploadRequest(
     const effectiveOriginalFilename = originalFilename ?? storedFilename;
     const effectiveMimeType = mimeType ?? "application/octet-stream";
 
-    const fullPath = path.join(UPLOADS_DIR, storedFilename);
-    const agentMessage =
-      `A file has been uploaded.\n\n` +
-      `Original filename: ${effectiveOriginalFilename}\n` +
-      `Stored at: ${fullPath}\n` +
-      `MIME type: ${effectiveMimeType}\n` +
-      `Size: ${fileSize} bytes\n\n` +
-      `You do not need to read this file right now. Use the read_upload tool if and when you need to access its contents.`;
+    const attachment: FileAttachment = {
+      storedPath,
+      originalFilename: effectiveOriginalFilename,
+      mimeType: effectiveMimeType,
+      size: fileSize,
+    };
 
     console.log("[stavrobot] File uploaded:", storedFilename, "size:", fileSize, "bytes");
 
     // Fire-and-forget: return the HTTP response immediately without waiting for the agent.
-    void enqueueMessage(agentMessage, "upload");
+    void enqueueMessage(undefined, "upload", undefined, undefined, undefined, [attachment]);
 
     response.writeHead(200, { "Content-Type": "application/json" });
     response.end(JSON.stringify({ message: "File uploaded successfully", filename: storedFilename }));

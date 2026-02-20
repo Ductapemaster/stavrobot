@@ -1,6 +1,7 @@
 import { Marked, type RendererObject, type Tokens } from "marked";
 import type { TelegramConfig } from "./config.js";
 import { enqueueMessage } from "./queue.js";
+import { saveAttachment, type FileAttachment } from "./uploads.js";
 
 interface TelegramVoice {
   file_id: string;
@@ -13,6 +14,8 @@ interface TelegramMessage {
   caption?: string;
   voice?: TelegramVoice;
   audio?: TelegramVoice;
+  photo?: Array<{ file_id: string; file_size?: number }>;
+  document?: { file_id: string; file_name?: string; mime_type?: string };
 }
 
 interface TelegramUpdate {
@@ -160,7 +163,7 @@ export async function registerTelegramWebhook(config: TelegramConfig, publicHost
   console.log("[stavrobot] Telegram webhook registered successfully.");
 }
 
-async function downloadVoiceAsBase64(config: TelegramConfig, fileId: string): Promise<string> {
+async function downloadTelegramFile(config: TelegramConfig, fileId: string): Promise<Buffer> {
   console.log("[stavrobot] Fetching Telegram file info for file_id:", fileId);
 
   const fileInfoResponse = await fetch(
@@ -179,10 +182,15 @@ async function downloadVoiceAsBase64(config: TelegramConfig, fileId: string): Pr
     `https://api.telegram.org/file/bot${config.botToken}/${filePath}`
   );
   const arrayBuffer = await fileResponse.arrayBuffer();
-  const base64 = Buffer.from(arrayBuffer).toString("base64");
+  const buffer = Buffer.from(arrayBuffer);
 
-  console.log("[stavrobot] Downloaded audio, size (bytes):", arrayBuffer.byteLength);
-  return base64;
+  console.log("[stavrobot] Downloaded file, size (bytes):", arrayBuffer.byteLength);
+  return buffer;
+}
+
+async function downloadVoiceAsBase64(config: TelegramConfig, fileId: string): Promise<string> {
+  const buffer = await downloadTelegramFile(config, fileId);
+  return buffer.toString("base64");
 }
 
 export async function handleTelegramWebhook(
@@ -231,6 +239,51 @@ export async function handleTelegramWebhook(
     return;
   }
 
+  if (message.photo !== undefined) {
+    // Pick the last element, which Telegram guarantees is the highest resolution.
+    const photo = message.photo[message.photo.length - 1];
+    const fileId = photo.file_id;
+    console.log("[stavrobot] Telegram photo message from chat:", chatId, "file_id:", fileId);
+    // Fire-and-forget: Telegram requires a fast 200 response, so we don't await.
+    void downloadTelegramFile(config, fileId).then(async (buffer) => {
+      const filename = `photo-${fileId}.jpg`;
+      const mimeType = "image/jpeg";
+      const { storedPath } = await saveAttachment(buffer, filename, mimeType);
+      const attachment: FileAttachment = {
+        storedPath,
+        originalFilename: filename,
+        mimeType,
+        size: buffer.length,
+      };
+      void enqueueMessage(message.caption, "telegram", String(chatId), undefined, undefined, [attachment]);
+    }).catch((error: unknown) => {
+      console.error("[stavrobot] Error downloading Telegram photo:", error);
+    });
+    return;
+  }
+
+  if (message.document !== undefined) {
+    const document = message.document;
+    const fileId = document.file_id;
+    const mimeType = document.mime_type ?? "application/octet-stream";
+    const filename = document.file_name ?? `document-${fileId}`;
+    console.log("[stavrobot] Telegram document message from chat:", chatId, "file_id:", fileId, "mimeType:", mimeType);
+    // Fire-and-forget: Telegram requires a fast 200 response, so we don't await.
+    void downloadTelegramFile(config, fileId).then(async (buffer) => {
+      const { storedPath } = await saveAttachment(buffer, filename, mimeType);
+      const attachment: FileAttachment = {
+        storedPath,
+        originalFilename: filename,
+        mimeType,
+        size: buffer.length,
+      };
+      void enqueueMessage(message.caption, "telegram", String(chatId), undefined, undefined, [attachment]);
+    }).catch((error: unknown) => {
+      console.error("[stavrobot] Error downloading Telegram document:", error);
+    });
+    return;
+  }
+
   if (message.text !== undefined) {
     console.log("[stavrobot] Telegram text message from chat:", chatId);
     // Fire-and-forget: Telegram requires a fast 200 response, so we don't await.
@@ -238,5 +291,5 @@ export async function handleTelegramWebhook(
     return;
   }
 
-  console.log("[stavrobot] Telegram message has neither text nor voice/audio, ignoring.");
+  console.log("[stavrobot] Telegram message has no supported content, ignoring.");
 }

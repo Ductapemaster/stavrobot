@@ -15,7 +15,8 @@ import {
   handleTableSchemaRequest,
   handleTableRowsRequest,
 } from "./explorer.js";
-import { handleUploadRequest } from "./uploads.js";
+import { handleUploadRequest, saveAttachment } from "./uploads.js";
+import type { FileAttachment } from "./uploads.js";
 
 function isPublicRoute(method: string, pathname: string): boolean {
   if (method === "POST" && pathname === "/telegram/webhook") {
@@ -78,9 +79,62 @@ async function handleChatRequest(
     const message = "message" in parsedBody && typeof parsedBody.message === "string" ? parsedBody.message : undefined;
     const audio = "audio" in parsedBody && typeof parsedBody.audio === "string" ? parsedBody.audio : undefined;
 
-    if (message === undefined && audio === undefined) {
+    let attachments: FileAttachment[] | undefined;
+    if ("attachments" in parsedBody && Array.isArray(parsedBody.attachments)) {
+      attachments = (parsedBody.attachments as unknown[]).filter((item): item is FileAttachment => {
+        return (
+          typeof item === "object" &&
+          item !== null &&
+          typeof (item as Record<string, unknown>).storedPath === "string" &&
+          typeof (item as Record<string, unknown>).originalFilename === "string" &&
+          typeof (item as Record<string, unknown>).mimeType === "string" &&
+          typeof (item as Record<string, unknown>).size === "number"
+        );
+      });
+      if (attachments.length === 0) {
+        attachments = undefined;
+      }
+    }
+
+    // Parse raw file data sent by external callers (e.g. the Signal bridge) that
+    // cannot write to the app container's filesystem directly.
+    interface RawFileEntry {
+      data: string;
+      filename: string;
+      mimeType: string;
+    }
+    let savedFromFiles: FileAttachment[] = [];
+    if ("files" in parsedBody && Array.isArray(parsedBody.files)) {
+      const rawFiles = (parsedBody.files as unknown[]).filter((item): item is RawFileEntry => {
+        return (
+          typeof item === "object" &&
+          item !== null &&
+          typeof (item as Record<string, unknown>).data === "string" &&
+          typeof (item as Record<string, unknown>).filename === "string" &&
+          typeof (item as Record<string, unknown>).mimeType === "string"
+        );
+      });
+      console.log("[stavrobot] Received", rawFiles.length, "file(s) via 'files' field");
+      for (const rawFile of rawFiles) {
+        const buffer = Buffer.from(rawFile.data, "base64");
+        const { storedPath } = await saveAttachment(buffer, rawFile.filename, rawFile.mimeType);
+        savedFromFiles.push({
+          storedPath,
+          originalFilename: rawFile.filename,
+          mimeType: rawFile.mimeType,
+          size: buffer.length,
+        });
+      }
+    }
+
+    const combinedAttachments: FileAttachment[] | undefined =
+      (attachments !== undefined || savedFromFiles.length > 0)
+        ? [...(attachments ?? []), ...savedFromFiles]
+        : undefined;
+
+    if (message === undefined && audio === undefined && combinedAttachments === undefined) {
       response.writeHead(400, { "Content-Type": "application/json" });
-      response.end(JSON.stringify({ error: "At least one of 'message' or 'audio' must be present" }));
+      response.end(JSON.stringify({ error: "At least one of 'message', 'audio', 'attachments', or 'files' must be present" }));
       return;
     }
 
@@ -88,9 +142,9 @@ async function handleChatRequest(
     const sender = "sender" in parsedBody && typeof parsedBody.sender === "string" ? parsedBody.sender : undefined;
     const audioContentType = "audioContentType" in parsedBody && typeof parsedBody.audioContentType === "string" ? parsedBody.audioContentType : undefined;
 
-    console.log("[stavrobot] Incoming request:", { message, source, sender, hasAudio: audio !== undefined, audioContentType });
+    console.log("[stavrobot] Incoming request:", { message, source, sender, hasAudio: audio !== undefined, audioContentType, attachmentCount: combinedAttachments?.length ?? 0 });
 
-    const assistantResponse = await enqueueMessage(message, source, sender, audio, audioContentType);
+    const assistantResponse = await enqueueMessage(message, source, sender, audio, audioContentType, combinedAttachments);
 
     if (assistantResponse) {
       console.log("[stavrobot] Agent response:", assistantResponse);

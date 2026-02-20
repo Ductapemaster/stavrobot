@@ -1,8 +1,28 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { Type } from "@mariozechner/pi-ai";
+import type { ImageContent } from "@mariozechner/pi-ai";
 import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
 import { UPLOADS_DIR } from "./uploads.js";
+
+const IMAGE_EXTENSIONS = new Set([".jpg", ".jpeg", ".png", ".gif", ".webp"]);
+const TEXT_EXTENSIONS = new Set([".txt", ".md", ".csv", ".json", ".xml", ".html", ".css", ".js", ".ts", ".py", ".sh", ".yml", ".yaml", ".toml", ".ini", ".cfg", ".log", ".sql", ".env"]);
+
+function inferMimeType(extension: string): string {
+  switch (extension) {
+    case ".jpg":
+    case ".jpeg":
+      return "image/jpeg";
+    case ".png":
+      return "image/png";
+    case ".gif":
+      return "image/gif";
+    case ".webp":
+      return "image/webp";
+    default:
+      return "application/octet-stream";
+  }
+}
 
 function validatePath(filePath: string): string | null {
   // Normalize to resolve any .. or . segments, then check the prefix.
@@ -18,7 +38,7 @@ export function createReadUploadTool(): AgentTool {
   return {
     name: "read_upload",
     label: "Read upload",
-    description: "Read the text contents of an uploaded file by its full path.",
+    description: "Read the contents of an uploaded file by its full path. Text files are returned as text. Images (jpg, jpeg, png, gif, webp) are returned as image content for visual inspection. Other binary formats (e.g. pdf, zip) cannot be read directly.",
     parameters: Type.Object({
       path: Type.String({ description: "The full path to the uploaded file, e.g. /tmp/uploads/upload-abc123.txt." }),
     }),
@@ -39,27 +59,64 @@ export function createReadUploadTool(): AgentTool {
         };
       }
 
-      let contents: string;
-      try {
-        contents = await fs.readFile(filePath, "utf-8");
-      } catch (error) {
-        const isNotFound = error instanceof Error && "code" in error && (error as NodeJS.ErrnoException).code === "ENOENT";
-        if (!isNotFound) {
-          throw error;
+      const extension = path.extname(filePath).toLowerCase();
+
+      if (IMAGE_EXTENSIONS.has(extension)) {
+        console.log("[stavrobot] read_upload: classified as image:", extension);
+        let buffer: Buffer;
+        try {
+          buffer = await fs.readFile(filePath);
+        } catch (error) {
+          const isNotFound = error instanceof Error && "code" in error && (error as NodeJS.ErrnoException).code === "ENOENT";
+          if (!isNotFound) {
+            throw error;
+          }
+          const message = `File not found: ${filePath}`;
+          console.warn("[stavrobot] read_upload error:", message);
+          return {
+            content: [{ type: "text" as const, text: message }],
+            details: { message },
+          };
         }
-        const message = `File not found: ${filePath}`;
-        console.warn("[stavrobot] read_upload error:", message);
+        const base64Data = buffer.toString("base64");
+        const mimeType = inferMimeType(extension);
+        const imageContent: ImageContent = { type: "image", data: base64Data, mimeType };
+        console.log("[stavrobot] read_upload result: read image", buffer.length, "bytes from", filePath);
         return {
-          content: [{ type: "text" as const, text: message }],
-          details: { message },
+          content: [imageContent],
+          details: { message: `Read image (${mimeType}) of ${buffer.length} bytes from ${filePath}.` },
         };
       }
 
-      console.log("[stavrobot] read_upload result: read", contents.length, "characters from", filePath);
+      if (TEXT_EXTENSIONS.has(extension) || extension === "") {
+        console.log("[stavrobot] read_upload: classified as text:", extension || "(no extension)");
+        let contents: string;
+        try {
+          contents = await fs.readFile(filePath, "utf-8");
+        } catch (error) {
+          const isNotFound = error instanceof Error && "code" in error && (error as NodeJS.ErrnoException).code === "ENOENT";
+          if (!isNotFound) {
+            throw error;
+          }
+          const message = `File not found: ${filePath}`;
+          console.warn("[stavrobot] read_upload error:", message);
+          return {
+            content: [{ type: "text" as const, text: message }],
+            details: { message },
+          };
+        }
+        console.log("[stavrobot] read_upload result: read", contents.length, "characters from", filePath);
+        return {
+          content: [{ type: "text" as const, text: contents }],
+          details: { message: `Read ${contents.length} characters from ${filePath}.` },
+        };
+      }
 
+      const message = `Cannot read binary file directly. The file is stored at ${filePath} with type ${extension}.`;
+      console.log("[stavrobot] read_upload: classified as unsupported binary:", extension);
       return {
-        content: [{ type: "text" as const, text: contents }],
-        details: { message: `Read ${contents.length} characters from ${filePath}.` },
+        content: [{ type: "text" as const, text: message }],
+        details: { message },
       };
     },
   };
