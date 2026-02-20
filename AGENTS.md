@@ -27,12 +27,15 @@ npm run dev
 # Type-check without emitting (useful for CI or quick validation)
 npx tsc --noEmit
 
+# Run tests
+npm test
+
 # Docker
 docker compose up --build
 ```
 
-There is no test framework configured. No test runner, no test files. If tests are added,
-use vitest (it works well with ESM and TypeScript).
+Tests use vitest. Run `npm test` after changes that touch request handling, auth,
+or database logic.
 
 There is no linter or formatter configured. If one is added, use Biome (single tool for
 both linting and formatting with good TypeScript ESM support).

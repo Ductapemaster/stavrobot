@@ -264,17 +264,19 @@ export async function initializePagesSchema(pool: pg.Pool): Promise<void> {
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
   `);
+  await pool.query(`ALTER TABLE pages ADD COLUMN IF NOT EXISTS queries JSONB`);
 }
 
 export interface Page {
   mimetype: string;
   data: Buffer;
   isPublic: boolean;
+  queries: Record<string, string> | null;
 }
 
 export async function getPageByPath(pool: pg.Pool, path: string): Promise<Page | null> {
   const result = await pool.query(
-    "SELECT mimetype, data, is_public FROM pages WHERE path = $1",
+    "SELECT mimetype, data, is_public, queries FROM pages WHERE path = $1",
     [path],
   );
   if (result.rows.length === 0) {
@@ -285,7 +287,93 @@ export async function getPageByPath(pool: pg.Pool, path: string): Promise<Page |
     mimetype: row.mimetype as string,
     data: row.data as Buffer,
     isPublic: row.is_public as boolean,
+    queries: row.queries as Record<string, string> | null,
   };
+}
+
+export async function getPageQueryByPath(
+  pool: pg.Pool,
+  pagePath: string,
+  queryName: string,
+): Promise<{ query: string; isPublic: boolean } | null> {
+  const result = await pool.query(
+    "SELECT queries->>$2 AS query, is_public FROM pages WHERE path = $1",
+    [pagePath, queryName],
+  );
+  if (result.rows.length === 0) {
+    return null;
+  }
+  const row = result.rows[0];
+  const query = row.query as string | null;
+  if (query === null) {
+    return null;
+  }
+  return {
+    query,
+    isPublic: row.is_public as boolean,
+  };
+}
+
+export async function upsertPage(
+  pool: pg.Pool,
+  path: string,
+  mimetype?: string,
+  content?: string,
+  isPublic?: boolean,
+  queries?: Record<string, string>,
+): Promise<string> {
+  const existing = await pool.query("SELECT 1 FROM pages WHERE path = $1", [path]);
+
+  if (existing.rows.length === 0) {
+    if (content === undefined || mimetype === undefined) {
+      return "Error: content and mimetype are required when creating a new page.";
+    }
+    await pool.query(
+      `INSERT INTO pages (path, mimetype, data, is_public, queries)
+       VALUES ($1, $2, convert_to($3, 'UTF8'), $4, $5)`,
+      [path, mimetype, content, isPublic ?? false, queries !== undefined ? JSON.stringify(queries) : null],
+    );
+    return `Page created at /pages/${path}`;
+  }
+
+  const setClauses: string[] = [];
+  const values: unknown[] = [];
+  let paramIndex = 1;
+
+  if (mimetype !== undefined) {
+    setClauses.push(`mimetype = $${paramIndex++}`);
+    values.push(mimetype);
+  }
+  if (content !== undefined) {
+    setClauses.push(`data = convert_to($${paramIndex++}, 'UTF8')`);
+    values.push(content);
+  }
+  if (isPublic !== undefined) {
+    setClauses.push(`is_public = $${paramIndex++}`);
+    values.push(isPublic);
+  }
+  if (queries !== undefined) {
+    setClauses.push(`queries = $${paramIndex++}`);
+    values.push(JSON.stringify(queries));
+  }
+
+  if (setClauses.length === 0) {
+    return "Error: no fields to update. Provide at least one of mimetype, content, is_public, or queries.";
+  }
+
+  setClauses.push(`updated_at = NOW()`);
+  values.push(path);
+
+  await pool.query(
+    `UPDATE pages SET ${setClauses.join(", ")} WHERE path = $${paramIndex}`,
+    values,
+  );
+  return `Page updated at /pages/${path}`;
+}
+
+export async function deletePage(pool: pg.Pool, path: string): Promise<boolean> {
+  const result = await pool.query("DELETE FROM pages WHERE path = $1", [path]);
+  return (result.rowCount ?? 0) > 0;
 }
 
 export async function executeSql(pool: pg.Pool, sql: string): Promise<string> {

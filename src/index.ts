@@ -1,7 +1,8 @@
 import http from "http";
+import { fileURLToPath } from "url";
 import type { Pool } from "pg";
 import { loadConfig } from "./config.js";
-import { connectDatabase, initializeSchema, initializeMemoriesSchema, initializeCompactionsSchema, initializeCronSchema, initializePagesSchema, getPageByPath } from "./database.js";
+import { connectDatabase, initializeSchema, initializeMemoriesSchema, initializeCompactionsSchema, initializeCronSchema, initializePagesSchema, getPageByPath, getPageQueryByPath } from "./database.js";
 import { createAgent } from "./agent.js";
 import { initializeQueue, enqueueMessage } from "./queue.js";
 import { initializeScheduler } from "./scheduler.js";
@@ -23,10 +24,14 @@ function isPublicRoute(method: string, pathname: string): boolean {
   if (method === "GET" && pathname.startsWith("/pages/")) {
     return true;
   }
+  // Page queries have per-page auth: the handler checks is_public and enforces auth itself.
+  if (method === "GET" && pathname.startsWith("/api/pages/") && pathname.includes("/queries/")) {
+    return true;
+  }
   return false;
 }
 
-function checkBasicAuth(request: http.IncomingMessage, password: string): boolean {
+export function checkBasicAuth(request: http.IncomingMessage, password: string): boolean {
   const authHeader = request.headers["authorization"];
   if (authHeader === undefined || !authHeader.startsWith("Basic ")) {
     return false;
@@ -140,59 +145,108 @@ async function handleTelegramWebhookRequest(
   }
 }
 
-async function handleDatabaseQueryRequest(
+// Returns an error message string if the SQL is not a valid read-only query, or null if it is valid.
+function validateReadOnlySql(sql: string): string | null {
+  if (!sql.match(/^(SELECT|WITH)\b/i)) {
+    return "Only SELECT queries are allowed";
+  }
+  // Strip one optional trailing semicolon, then reject if any remain — this
+  // blocks multi-statement injection like "SELECT 1; DELETE FROM users".
+  if (sql.replace(/;$/, "").includes(";")) {
+    return "Multiple SQL statements are not allowed";
+  }
+  return null;
+}
+
+export async function handlePageQueryRequest(
   request: http.IncomingMessage,
   response: http.ServerResponse,
+  pathname: string,
+  password: string | undefined,
   pool: Pool,
+  url: URL,
 ): Promise<void> {
   try {
-    const body = await readRequestBody(request);
-    let parsedBody: unknown;
+    // The path format is /api/pages/<pagePath>/queries/<queryName>.
+    // The query name is always the last segment after the last "/queries/".
+    // Everything between "/api/pages/" and the last "/queries/" is the page path.
+    const queriesMarker = "/queries/";
+    const lastQueriesIndex = pathname.lastIndexOf(queriesMarker);
+    const pagePath = pathname.slice("/api/pages/".length, lastQueriesIndex);
+    const queryName = pathname.slice(lastQueriesIndex + queriesMarker.length);
 
-    try {
-      parsedBody = JSON.parse(body);
-    } catch {
-      response.writeHead(400, { "Content-Type": "application/json" });
-      response.end(JSON.stringify({ error: "Invalid JSON" }));
+    if (pagePath === "" || queryName === "") {
+      response.writeHead(404, { "Content-Type": "application/json" });
+      response.end(JSON.stringify({ error: "Not found" }));
       return;
     }
 
-    if (typeof parsedBody !== "object" || parsedBody === null) {
-      response.writeHead(400, { "Content-Type": "application/json" });
-      response.end(JSON.stringify({ error: "Request body must be a JSON object" }));
+    const pageQuery = await getPageQueryByPath(pool, pagePath, queryName);
+    if (pageQuery === null) {
+      response.writeHead(404, { "Content-Type": "application/json" });
+      response.end(JSON.stringify({ error: "Not found" }));
       return;
     }
 
-    const rawQuery = "query" in parsedBody && typeof parsedBody.query === "string" ? parsedBody.query : undefined;
-    const query = rawQuery?.trim();
+    if (!pageQuery.isPublic && password !== undefined) {
+      if (!checkBasicAuth(request, password)) {
+        response.writeHead(401, {
+          "Content-Type": "application/json",
+          "WWW-Authenticate": `Basic realm="stavrobot"`,
+        });
+        response.end(JSON.stringify({ error: "Unauthorized" }));
+        return;
+      }
+    }
 
-    if (!query) {
+    const sql = pageQuery.query.trim();
+    const validationError = validateReadOnlySql(sql);
+    if (validationError !== null) {
       response.writeHead(400, { "Content-Type": "application/json" });
-      response.end(JSON.stringify({ error: "'query' must be a non-empty string" }));
+      response.end(JSON.stringify({ error: validationError }));
       return;
     }
 
-    if (!query.match(/^(SELECT|WITH)\b/i)) {
-      response.writeHead(400, { "Content-Type": "application/json" });
-      response.end(JSON.stringify({ error: "Only SELECT queries are allowed" }));
-      return;
+    // Parse $param:name placeholders and replace them with positional $1, $2, etc.
+    // Parameters are read from query string values.
+    const paramRegex = /\$param:(\w+)/g;
+    const paramNames: string[] = [];
+    const seenParams = new Set<string>();
+    let match: RegExpExecArray | null;
+    while ((match = paramRegex.exec(sql)) !== null) {
+      const name = match[1];
+      if (!seenParams.has(name)) {
+        seenParams.add(name);
+        paramNames.push(name);
+      }
     }
 
-    // Strip one optional trailing semicolon, then reject if any remain — this
-    // blocks multi-statement injection like "SELECT 1; DELETE FROM users".
-    if (query.replace(/;$/, "").includes(";")) {
-      response.writeHead(400, { "Content-Type": "application/json" });
-      response.end(JSON.stringify({ error: "Multiple SQL statements are not allowed" }));
-      return;
+    const paramValues: string[] = [];
+    for (const name of paramNames) {
+      const value = url.searchParams.get(name);
+      if (value === null) {
+        response.writeHead(400, { "Content-Type": "application/json" });
+        response.end(JSON.stringify({ error: `Missing query parameter: ${name}` }));
+        return;
+      }
+      paramValues.push(value);
     }
 
-    console.log("[stavrobot] Database query:", query);
-    const result = await pool.query(query);
+    // Replace each unique $param:name with its positional placeholder $1, $2, etc.
+    let paramIndex = 0;
+    const paramMap = new Map<string, string>();
+    for (const name of paramNames) {
+      paramMap.set(name, `$${++paramIndex}`);
+    }
+    const parameterizedSql = sql.replace(/\$param:(\w+)/g, (_full, name: string) => paramMap.get(name) ?? "");
+
+    console.log(`[stavrobot] Page query: ${pagePath}/${queryName}`, parameterizedSql);
+    const result = await pool.query(parameterizedSql, paramValues);
 
     response.writeHead(200, { "Content-Type": "application/json" });
     response.end(JSON.stringify(result.rows));
   } catch (error) {
-    console.error("[stavrobot] Error handling database query request:", error);
+    console.error("[stavrobot] Error handling page query request:", error);
     const errorMessage = error instanceof Error ? error.message : String(error);
     response.writeHead(500, { "Content-Type": "application/json" });
     response.end(JSON.stringify({ error: errorMessage }));
@@ -302,8 +356,8 @@ async function main(): Promise<void> {
         response.writeHead(404, { "Content-Type": "application/json" });
         response.end(JSON.stringify({ error: "Not found" }));
       }
-    } else if (request.method === "POST" && pathname === "/api/database/query") {
-      void handleDatabaseQueryRequest(request, response, pool);
+    } else if (request.method === "GET" && pathname.startsWith("/api/pages/") && pathname.includes("/queries/")) {
+      void handlePageQueryRequest(request, response, pathname, config.password, pool, url);
     } else if (request.method === "GET" && pathname.startsWith("/pages/")) {
       void handlePageRequest(request, response, pathname, config.password, pool);
     } else {
@@ -318,4 +372,9 @@ async function main(): Promise<void> {
   });
 }
 
-main();
+// Only run main() when this file is the entry point, not when imported by tests.
+// In ESM, import.meta.url is the file URL of this module; process.argv[1] is the
+// path of the entry-point script. We compare them to detect the direct-run case.
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  main();
+}
