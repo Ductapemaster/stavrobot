@@ -231,6 +231,14 @@ user, chmod 600), then execs the server as that user. The LLM process cannot rea
 - When in doubt, require auth. It is better to accidentally require auth on something
   that could be public than to accidentally expose something that should be private.
 
+## Pages
+
+- The `pages` table stores HTML pages created by the LLM agent. Schema: `path` (unique text, the URL path), `title` (text), `content` (HTML), `is_public` (boolean, default false).
+- Pages are served at `GET /pages/<path>`.
+- `is_public` controls whether authentication is required to view a page. When false (the default), the route handler returns 401 for unauthenticated requests.
+- The LLM agent creates and updates pages via `execute_sql` — there is no dedicated API endpoint for page management.
+- The `/pages/` prefix is whitelisted in `isPublicRoute` so the route is reachable without a session cookie, but the route handler itself enforces auth for pages where `is_public` is false.
+
 ## General rules
 
 - Do not write forgiving code. Let errors propagate rather than silently catching them.

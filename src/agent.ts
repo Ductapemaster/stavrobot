@@ -499,9 +499,9 @@ export async function createAgent(config: Config, pool: pg.Pool): Promise<Agent>
     tools.push(createSendTelegramMessageTool(config.telegram));
   }
 
-  const effectiveBasePrompt = config.customPrompt !== undefined
+  const effectiveBasePrompt = (config.customPrompt !== undefined
     ? `${config.baseSystemPrompt}\n\n${config.customPrompt}`
-    : config.baseSystemPrompt;
+    : config.baseSystemPrompt) + `\n\nYour external hostname is ${config.publicHostname}.`;
 
   const agent = new Agent({
     initialState: {
@@ -585,9 +585,9 @@ export async function handlePrompt(
 ): Promise<string> {
   const memories = await loadAllMemories(pool);
 
-  const effectiveBasePrompt = config.customPrompt !== undefined
+  const effectiveBasePrompt = (config.customPrompt !== undefined
     ? `${config.baseSystemPrompt}\n\n${config.customPrompt}`
-    : config.baseSystemPrompt;
+    : config.baseSystemPrompt) + `\n\nYour external hostname is ${config.publicHostname}.`;
 
   if (memories.length === 0) {
     agent.setSystemPrompt(effectiveBasePrompt);

@@ -48,7 +48,7 @@ export interface Config {
   model: string;
   apiKey?: string;
   authFile?: string;
-  publicHostname?: string;
+  publicHostname: string;
   password?: string;
   baseSystemPrompt: string;
   customPrompt?: string;
@@ -75,19 +75,17 @@ export function loadConfig(): Config {
   if (config.apiKey !== undefined && config.authFile !== undefined) {
     throw new Error("Config must specify either apiKey or authFile, not both.");
   }
-  if (config.authFile !== undefined && config.publicHostname === undefined) {
-    throw new Error("Config must specify publicHostname when authFile is set.");
+  if (config.publicHostname === undefined) {
+    throw new Error("Config must specify publicHostname.");
   }
-  if (config.publicHostname !== undefined) {
-    if (config.publicHostname.trim() === "") {
-      throw new Error("Config publicHostname must not be empty.");
-    }
-    if (!config.publicHostname.startsWith("http://") && !config.publicHostname.startsWith("https://")) {
-      throw new Error("Config publicHostname must start with http:// or https://.");
-    }
-    if (config.publicHostname.endsWith("/")) {
-      throw new Error("Config publicHostname must not end with a trailing slash.");
-    }
+  if (config.publicHostname.trim() === "") {
+    throw new Error("Config publicHostname must not be empty.");
+  }
+  if (!config.publicHostname.startsWith("http://") && !config.publicHostname.startsWith("https://")) {
+    throw new Error("Config publicHostname must start with http:// or https://.");
+  }
+  if (config.publicHostname.endsWith("/")) {
+    throw new Error("Config publicHostname must not end with a trailing slash.");
   }
 
   return config;

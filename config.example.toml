@@ -16,7 +16,6 @@ authFile = "/app/data/auth.json"
 
 
 # The public HTTPS URL where this server is reachable (no trailing slash).
-# Required when authFile is set. Also used to register the Telegram webhook.
 publicHostname = "https://example.com"
 
 # Optional additional instructions appended to the base system prompt.

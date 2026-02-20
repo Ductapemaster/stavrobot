@@ -1,6 +1,7 @@
 import http from "http";
+import type { Pool } from "pg";
 import { loadConfig } from "./config.js";
-import { connectDatabase, initializeSchema, initializeMemoriesSchema, initializeCompactionsSchema, initializeCronSchema } from "./database.js";
+import { connectDatabase, initializeSchema, initializeMemoriesSchema, initializeCompactionsSchema, initializeCronSchema, initializePagesSchema, getPageByPath } from "./database.js";
 import { createAgent } from "./agent.js";
 import { initializeQueue, enqueueMessage } from "./queue.js";
 import { initializeScheduler } from "./scheduler.js";
@@ -15,7 +16,14 @@ import {
 } from "./explorer.js";
 
 function isPublicRoute(method: string, pathname: string): boolean {
-  return method === "POST" && pathname === "/telegram/webhook";
+  if (method === "POST" && pathname === "/telegram/webhook") {
+    return true;
+  }
+  // Pages have per-row auth: the route handler checks is_public and enforces auth itself.
+  if (method === "GET" && pathname.startsWith("/pages/")) {
+    return true;
+  }
+  return false;
 }
 
 function checkBasicAuth(request: http.IncomingMessage, password: string): boolean {
@@ -132,6 +140,51 @@ async function handleTelegramWebhookRequest(
   }
 }
 
+async function handlePageRequest(
+  request: http.IncomingMessage,
+  response: http.ServerResponse,
+  pathname: string,
+  password: string | undefined,
+  pool: Pool,
+): Promise<void> {
+  try {
+    // Strip the "/pages/" prefix and any trailing slash to get the stored path.
+    const pagePath = pathname.slice("/pages/".length).replace(/\/+$/, "");
+    if (pagePath === "") {
+      response.writeHead(404, { "Content-Type": "application/json" });
+      response.end(JSON.stringify({ error: "Not found" }));
+      return;
+    }
+
+    const page = await getPageByPath(pool, pagePath);
+    if (page === null) {
+      response.writeHead(404, { "Content-Type": "application/json" });
+      response.end(JSON.stringify({ error: "Not found" }));
+      return;
+    }
+
+    if (!page.isPublic && password !== undefined) {
+      if (!checkBasicAuth(request, password)) {
+        response.writeHead(401, {
+          "Content-Type": "application/json",
+          "WWW-Authenticate": `Basic realm="stavrobot"`,
+        });
+        response.end(JSON.stringify({ error: "Unauthorized" }));
+        return;
+      }
+    }
+
+    console.log(`[stavrobot] Serving page: ${pagePath} (public: ${page.isPublic})`);
+    response.writeHead(200, { "Content-Type": page.mimetype });
+    response.end(page.data);
+  } catch (error) {
+    console.error("[stavrobot] Error handling page request:", error);
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    response.writeHead(500, { "Content-Type": "application/json" });
+    response.end(JSON.stringify({ error: errorMessage }));
+  }
+}
+
 async function main(): Promise<void> {
   const config = loadConfig();
   const pool = await connectDatabase(config.postgres);
@@ -139,6 +192,7 @@ async function main(): Promise<void> {
   await initializeMemoriesSchema(pool);
   await initializeCompactionsSchema(pool);
   await initializeCronSchema(pool);
+  await initializePagesSchema(pool);
   const agent = await createAgent(config, pool);
   initializeQueue(agent, pool, config);
   await initializeScheduler(pool);
@@ -189,6 +243,8 @@ async function main(): Promise<void> {
         response.writeHead(404, { "Content-Type": "application/json" });
         response.end(JSON.stringify({ error: "Not found" }));
       }
+    } else if (request.method === "GET" && pathname.startsWith("/pages/")) {
+      void handlePageRequest(request, response, pathname, config.password, pool);
     } else {
       response.writeHead(404, { "Content-Type": "application/json" });
       response.end(JSON.stringify({ error: "Not found" }));

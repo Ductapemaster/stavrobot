@@ -252,6 +252,42 @@ export async function listCronEntries(pool: pg.Pool): Promise<CronEntry[]> {
   }));
 }
 
+export async function initializePagesSchema(pool: pg.Pool): Promise<void> {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS pages (
+      id SERIAL PRIMARY KEY,
+      path TEXT NOT NULL UNIQUE,
+      mimetype TEXT NOT NULL,
+      data BYTEA NOT NULL,
+      is_public BOOLEAN NOT NULL DEFAULT FALSE,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+}
+
+export interface Page {
+  mimetype: string;
+  data: Buffer;
+  isPublic: boolean;
+}
+
+export async function getPageByPath(pool: pg.Pool, path: string): Promise<Page | null> {
+  const result = await pool.query(
+    "SELECT mimetype, data, is_public FROM pages WHERE path = $1",
+    [path],
+  );
+  if (result.rows.length === 0) {
+    return null;
+  }
+  const row = result.rows[0];
+  return {
+    mimetype: row.mimetype as string,
+    data: row.data as Buffer,
+    isPublic: row.is_public as boolean,
+  };
+}
+
 export async function executeSql(pool: pg.Pool, sql: string): Promise<string> {
   const result = await pool.query(sql);
   

@@ -16,6 +16,7 @@ A personal AI assistant with persistent memory, sandboxed code execution, and Si
 - **Conversation compaction.** Auto-summarizes long conversation histories to stay within context limits.
 - **Web search and fetch.** Optional tools for searching the web and fetching/analyzing URLs via sub-agent LLM calls.
 - **Database explorer.** A web UI at `/explorer` for browsing PostgreSQL tables, viewing schemas, and paginating through rows.
+- **Pages.** The agent can create web pages stored in the database and served at `/pages/<path>`. Pages are private (auth-required) by default, with an option to make individual pages public.
 
 ## Architecture
 
