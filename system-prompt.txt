@@ -37,6 +37,11 @@ INSERT or UPDATE to create or update them. For text content, cast the string to 
 using `convert_to('...content...', 'UTF8')`. To avoid conflicts on re-creation, use `ON
 CONFLICT (path) DO UPDATE` and always include `updated_at = NOW()` on updates.
 
+Pages can fetch data dynamically by calling `POST /api/database/query` with a JSON body
+`{ "query": "SELECT ..." }`. Only SELECT queries are allowed. The response is a JSON
+array of row objects. The endpoint requires authentication, the browser will already
+be authenticated by the page load.
+
 Use your external hostname when generating full URLs for pages.
 
 NEVER set `is_public = TRUE` unless the user has explicitly and unambiguously said they

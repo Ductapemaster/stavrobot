@@ -140,6 +140,65 @@ async function handleTelegramWebhookRequest(
   }
 }
 
+async function handleDatabaseQueryRequest(
+  request: http.IncomingMessage,
+  response: http.ServerResponse,
+  pool: Pool,
+): Promise<void> {
+  try {
+    const body = await readRequestBody(request);
+    let parsedBody: unknown;
+
+    try {
+      parsedBody = JSON.parse(body);
+    } catch {
+      response.writeHead(400, { "Content-Type": "application/json" });
+      response.end(JSON.stringify({ error: "Invalid JSON" }));
+      return;
+    }
+
+    if (typeof parsedBody !== "object" || parsedBody === null) {
+      response.writeHead(400, { "Content-Type": "application/json" });
+      response.end(JSON.stringify({ error: "Request body must be a JSON object" }));
+      return;
+    }
+
+    const rawQuery = "query" in parsedBody && typeof parsedBody.query === "string" ? parsedBody.query : undefined;
+    const query = rawQuery?.trim();
+
+    if (!query) {
+      response.writeHead(400, { "Content-Type": "application/json" });
+      response.end(JSON.stringify({ error: "'query' must be a non-empty string" }));
+      return;
+    }
+
+    if (!query.match(/^(SELECT|WITH)\b/i)) {
+      response.writeHead(400, { "Content-Type": "application/json" });
+      response.end(JSON.stringify({ error: "Only SELECT queries are allowed" }));
+      return;
+    }
+
+    // Strip one optional trailing semicolon, then reject if any remain — this
+    // blocks multi-statement injection like "SELECT 1; DELETE FROM users".
+    if (query.replace(/;$/, "").includes(";")) {
+      response.writeHead(400, { "Content-Type": "application/json" });
+      response.end(JSON.stringify({ error: "Multiple SQL statements are not allowed" }));
+      return;
+    }
+
+    console.log("[stavrobot] Database query:", query);
+    const result = await pool.query(query);
+
+    response.writeHead(200, { "Content-Type": "application/json" });
+    response.end(JSON.stringify(result.rows));
+  } catch (error) {
+    console.error("[stavrobot] Error handling database query request:", error);
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    response.writeHead(500, { "Content-Type": "application/json" });
+    response.end(JSON.stringify({ error: errorMessage }));
+  }
+}
+
 async function handlePageRequest(
   request: http.IncomingMessage,
   response: http.ServerResponse,
@@ -243,6 +302,8 @@ async function main(): Promise<void> {
         response.writeHead(404, { "Content-Type": "application/json" });
         response.end(JSON.stringify({ error: "Not found" }));
       }
+    } else if (request.method === "POST" && pathname === "/api/database/query") {
+      void handleDatabaseQueryRequest(request, response, pool);
     } else if (request.method === "GET" && pathname.startsWith("/pages/")) {
       void handlePageRequest(request, response, pathname, config.password, pool);
     } else {
