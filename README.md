@@ -10,7 +10,7 @@ A personal AI assistant with persistent memory, sandboxed code execution, and Si
 - **Telegram integration.** Two-way messaging via a Telegram bot webhook, including voice note transcription (OpenAI STT).
 - **Two-tier memory.** Tier 1: a self-managed memory store injected into the system prompt every turn (the agent decides what to remember). Tier 2: full read/write access to a PostgreSQL database via unrestricted SQL — the agent can create tables, query, and store anything.
 - **Self-programming.** The agent can request a secondary coding agent to create new tools at runtime. Tools are executable scripts with a JSON manifest, discovered and invoked by the main agent.
-- **Security.** Python runs as an unprivileged `pythonrunner` user with a stripped environment and a 30-second timeout. Custom tools run as `toolrunner` with the same restrictions. `config.toml` is `chmod 600` so sandboxed processes can't read secrets. A Signal allowlist restricts which phone numbers can interact with the agent.
+- **Security.** The bot runs in isolated containers with no access to the host system. Code execution is sandboxed with timeouts and no access to secrets. Signal and Telegram allowlists restrict who can interact with the agent.
 - **Sandboxed Python execution.** Arbitrary Python with pip dependencies via `uv`, isolated from the host environment.
 - **Cron scheduling.** The agent can schedule its own recurring or one-shot reminders.
 - **Conversation compaction.** Auto-summarizes long conversation histories to stay within context limits.
