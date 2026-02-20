@@ -2,6 +2,7 @@ node_modules
 dist
 config.json
 config.toml
+.env
 __pycache__/
 data/
 coding-team/

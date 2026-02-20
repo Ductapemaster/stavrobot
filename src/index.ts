@@ -355,7 +355,7 @@ async function handlePageRequest(
 
 async function main(): Promise<void> {
   const config = loadConfig();
-  const pool = await connectDatabase(config.postgres);
+  const pool = await connectDatabase();
   await initializeSchema(pool);
   await initializeMemoriesSchema(pool);
   await initializeCompactionsSchema(pool);

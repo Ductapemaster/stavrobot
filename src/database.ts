@@ -1,8 +1,9 @@
 import pg from "pg";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import type { PostgresConfig } from "./config.js";
+import { loadPostgresConfig } from "./config.js";
 
-export async function connectDatabase(config: PostgresConfig): Promise<pg.Pool> {
+export async function connectDatabase(): Promise<pg.Pool> {
+  const config = loadPostgresConfig();
   const pool = new pg.Pool({
     host: config.host,
     port: config.port,

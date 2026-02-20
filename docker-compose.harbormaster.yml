@@ -1,8 +1,18 @@
 services:
   postgres:
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-stavrobot}
+      POSTGRES_USER: ${POSTGRES_USER:-stavrobot}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-stavrobot}
     volumes:
       - {{ HM_DATA_DIR }}/postgres:/var/lib/postgresql/data
   app:
+    environment:
+      PGHOST: postgres
+      PGPORT: 5432
+      PGUSER: ${POSTGRES_USER:-stavrobot}
+      PGPASSWORD: ${POSTGRES_PASSWORD:-stavrobot}
+      PGDATABASE: ${POSTGRES_DB:-stavrobot}
     volumes:
       - {{ HM_DATA_DIR }}/main/config.toml:/app/config.toml
       - {{ HM_DATA_DIR }}/app:/app/data

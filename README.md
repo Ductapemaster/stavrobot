@@ -28,7 +28,8 @@ Five Docker containers: `app` (TypeScript server, exposes `POST /chat` on port 3
 
 1. Copy `config.example.toml` to `data/main/config.toml`.
 2. Fill in API keys and settings. The example file has comments explaining each section.
-3. At minimum, set `apiKey` and the `[postgres]` section. Everything else is optional.
+3. At minimum, set `authFile` (or `apiKey`) and `publicHostname`. Everything else is optional.
+4. Postgres credentials are configured via environment variables (`PGHOST`, `PGPORT`, `PGUSER`, `PGPASSWORD`, `PGDATABASE`). The defaults work out of the box with docker-compose. To override, copy `env.example` to `.env` and set `POSTGRES_USER`, `POSTGRES_PASSWORD`, and/or `POSTGRES_DB`.
 
 ### Claude Code setup
 

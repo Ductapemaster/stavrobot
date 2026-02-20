@@ -52,7 +52,6 @@ export interface Config {
   password?: string;
   baseSystemPrompt: string;
   customPrompt?: string;
-  postgres: PostgresConfig;
   tts?: TtsConfig;
   stt?: SttConfig;
   webSearch?: WebSearchConfig;
@@ -89,4 +88,14 @@ export function loadConfig(): Config {
   }
 
   return config;
+}
+
+export function loadPostgresConfig(): PostgresConfig {
+  return {
+    host: process.env.PGHOST ?? "postgres",
+    port: process.env.PGPORT !== undefined ? parseInt(process.env.PGPORT, 10) : 5432,
+    user: process.env.PGUSER ?? "stavrobot",
+    password: process.env.PGPASSWORD ?? "stavrobot",
+    database: process.env.PGDATABASE ?? "stavrobot",
+  };
 }

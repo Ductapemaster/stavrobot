@@ -26,15 +26,6 @@ normal dashes rather than en- or em-dashes. Don't end messages with a full stop,
 too formal.
 """
 
-# The PostgreSQL database the agent uses for persistent storage. The defaults
-# here match the docker-compose setup and work out of the box.
-[postgres]
-host = "postgres"
-port = 5432
-database = "stavrobot"
-user = "stavrobot"
-password = "stavrobot"
-
 # Signal integration. account is the phone number registered with signal-cli.
 # allowedNumbers is the allowlist of numbers permitted to message the agent.
 [signal]
