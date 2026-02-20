@@ -35,18 +35,23 @@ const CONTENT_TYPE_TO_EXTENSION: Record<string, string> = {
 };
 
 async function convertToMp3(audio: Buffer, inputExtension: string): Promise<Buffer> {
-  const inputPath = join(tmpdir(), `stavrobot-stt-input-${Date.now()}.${inputExtension}`);
-  const outputPath = join(tmpdir(), `stavrobot-stt-output-${Date.now()}.mp3`);
+  const timestamp = Date.now();
+  const inputPath = join(tmpdir(), `stavrobot-stt-input-${timestamp}.${inputExtension}`);
+  const wavPath = join(tmpdir(), `stavrobot-stt-wav-${timestamp}.wav`);
+  const outputPath = join(tmpdir(), `stavrobot-stt-output-${timestamp}.mp3`);
 
   try {
     await writeFile(inputPath, audio);
-    console.log("[stavrobot] convertToMp3: running ffmpeg on", inputPath);
-    await execFileAsync("ffmpeg", ["-y", "-i", inputPath, "-c:a", "libmp3lame", "-q:a", "2", outputPath]);
+    console.log("[stavrobot] convertToMp3: running faad on", inputPath);
+    await execFileAsync("faad", ["-o", wavPath, inputPath]);
+    console.log("[stavrobot] convertToMp3: running lame on", wavPath);
+    await execFileAsync("lame", ["-V", "2", wavPath, outputPath]);
     const converted = await readFile(outputPath);
     console.log("[stavrobot] convertToMp3: converted to mp3, size:", converted.byteLength, "bytes");
     return converted;
   } finally {
     await unlink(inputPath).catch(() => undefined);
+    await unlink(wavPath).catch(() => undefined);
     await unlink(outputPath).catch(() => undefined);
   }
 }
@@ -64,7 +69,7 @@ export async function transcribeAudio(audio: Buffer, config: SttConfig, contentT
     // Strip parameters (e.g. "audio/aac; codecs=...") before using as extension.
     const baseType = contentType.split(";")[0].trim();
     const inputExtension = baseType.split("/")[1] ?? "bin";
-    console.log("[stavrobot] transcribeAudio: unsupported content type", contentType, "- converting to mp3 via ffmpeg");
+    console.log("[stavrobot] transcribeAudio: unsupported content type", contentType, "- converting to mp3 via faad/lame");
     audioBuffer = await convertToMp3(audio, inputExtension);
     blobFilename = "audio.mp3";
   }
