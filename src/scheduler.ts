@@ -1,7 +1,10 @@
+import fs from "fs";
+import path from "path";
 import pg from "pg";
 import { CronExpressionParser } from "cron-parser";
 import { listCronEntries, deleteCronEntry } from "./database.js";
 import { enqueueMessage } from "./queue.js";
+import { UPLOADS_DIR } from "./uploads.js";
 
 interface ScheduledEntry {
   id: number;
@@ -39,6 +42,37 @@ async function loadEntries(pool: pg.Pool): Promise<void> {
   });
 }
 
+const THREE_DAYS_MS = 3 * 24 * 60 * 60 * 1000;
+
+async function cleanupOldUploads(): Promise<void> {
+  let entries: string[];
+  try {
+    entries = await fs.promises.readdir(UPLOADS_DIR);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return;
+    }
+    throw error;
+  }
+
+  const now = Date.now();
+  for (const entry of entries) {
+    if (!entry.startsWith("upload-")) {
+      continue;
+    }
+    const filePath = path.join(UPLOADS_DIR, entry);
+    try {
+      const stat = await fs.promises.stat(filePath);
+      if (now - stat.mtimeMs > THREE_DAYS_MS) {
+        await fs.promises.unlink(filePath);
+        console.log("[stavrobot] Deleted old upload:", filePath);
+      }
+    } catch (error) {
+      console.error("[stavrobot] Error processing upload file during cleanup:", filePath, error);
+    }
+  }
+}
+
 function tick(): void {
   const now = new Date();
 
@@ -64,6 +98,8 @@ function tick(): void {
     const framedNote = `[Cron entry ${entry.id} has fired] ${entry.note}\n\nThis is a scheduled reminder that has just triggered. Act on the note above directly (e.g. send a message, update a memory). Do not create new cron entries in response to this.`;
     void enqueueMessage(framedNote, "cron");
   }
+
+  void cleanupOldUploads();
 }
 
 export async function initializeScheduler(pool: pg.Pool): Promise<void> {

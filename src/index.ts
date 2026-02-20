@@ -15,6 +15,7 @@ import {
   handleTableSchemaRequest,
   handleTableRowsRequest,
 } from "./explorer.js";
+import { handleUploadRequest } from "./uploads.js";
 
 function isPublicRoute(method: string, pathname: string): boolean {
   if (method === "POST" && pathname === "/telegram/webhook") {
@@ -333,7 +334,9 @@ async function main(): Promise<void> {
       }
     }
 
-    if (request.method === "POST" && pathname === "/chat") {
+    if (request.method === "POST" && pathname === "/api/upload") {
+      void handleUploadRequest(request, response);
+    } else if (request.method === "POST" && pathname === "/chat") {
       handleChatRequest(request, response);
     } else if (request.method === "POST" && pathname === "/telegram/webhook") {
       handleTelegramWebhookRequest(request, response, config.telegram);
