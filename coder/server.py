@@ -67,7 +67,7 @@ def run_coding_task(task_id: str, message: str) -> None:
                 "-p", message,
                 "--output-format", "json",
                 "--dangerously-skip-permissions",
-                "--system-prompt-file", SYSTEM_PROMPT_PATH,
+                "--append-system-prompt-file", SYSTEM_PROMPT_PATH,
                 "--no-session-persistence",
                 "--model", model,
             ],
@@ -78,6 +78,9 @@ def run_coding_task(task_id: str, message: str) -> None:
         )
 
         print(f"[stavrobot-coder] Task {task_id} subprocess exited with code {result.returncode}")
+        print(f"[stavrobot-coder] Task {task_id} stdout: {result.stdout}")
+        if result.stderr:
+            print(f"[stavrobot-coder] Task {task_id} stderr: {result.stderr}")
 
         output = json.loads(result.stdout)
         subtype = output.get("subtype", "")

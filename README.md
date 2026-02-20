@@ -19,7 +19,7 @@ A personal AI assistant with persistent memory, sandboxed code execution, and Si
 
 ## Architecture
 
-Five Docker containers: `app` (TypeScript server, exposes `POST /chat` on port 3000 and handles Telegram webhooks at `POST /telegram/webhook`), `postgres` (PostgreSQL 17 for persistent state), `signal-bridge` (Python daemon bridging Signal via signal-cli to the app), `coder` (Node.js tool runner — lists, inspects, and executes custom tools), and `claude-code` (Claude Code headless agent for creating custom tools).
+Five Docker containers: `app` (TypeScript server, exposes `POST /chat` on port 3000 and handles Telegram webhooks at `POST /telegram/webhook`), `postgres` (PostgreSQL 17 for persistent state), `signal-bridge` (Python daemon bridging Signal via signal-cli to the app), `tool-runner` (Node.js tool runner — lists, inspects, and executes custom tools), and `coder` (Claude Code headless agent for creating custom tools).
 
 ## Setup
 
@@ -31,10 +31,10 @@ Five Docker containers: `app` (TypeScript server, exposes `POST /chat` on port 3
 
 ### Claude Code setup
 
-The `claude-code` container uses Claude Code with subscription auth (OAuth), separate from the main app's API key.
+The `coder` container uses Claude Code with subscription auth (OAuth), separate from the main app's API key.
 
 1. Start the containers: `docker compose up --build`
-2. Log in: `docker compose exec -u coder claude-code claude` (it will prompt you to log in if you haven't).
+2. Log in: `docker compose exec -u coder coder claude` (it will prompt you to log in if you haven't).
 3. Follow the browser-based OAuth flow.
 4. Set `[coder].model` in your config to a Claude Code model alias (`sonnet`, `opus`, or `haiku`).
 

@@ -36,22 +36,22 @@ services:
       postgres:
         condition: service_healthy
 
-  coder:
-    build: ./coder
+  tool-runner:
+    build: ./tool-runner
     environment:
       TZ: Europe/Athens
     restart: unless-stopped
     volumes:
       - ./data/tools:/tools
 
-  claude-code:
-    build: ./claude-code
+  coder:
+    build: ./coder
     environment:
       TZ: Europe/Athens
     restart: unless-stopped
     volumes:
       - ./data/main:/config
-      - ./data/claude-code:/home/coder/.claude
+      - ./data/coder:/home/coder/.claude
       - ./data/tools:/tools
     depends_on:
       app:

@@ -1,8 +1,8 @@
 import { Type } from "@mariozechner/pi-ai";
 import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
 
-const TOOL_RUNNER_BASE_URL = "http://coder:3001";
-const CLAUDE_CODE_BASE_URL = "http://claude-code:3002";
+const TOOL_RUNNER_BASE_URL = "http://tool-runner:3001";
+const CLAUDE_CODE_BASE_URL = "http://coder:3002";
 
 export function createListToolsTool(): AgentTool {
   return {

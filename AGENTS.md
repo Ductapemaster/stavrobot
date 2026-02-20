@@ -171,21 +171,21 @@ The Python code (`client.py`) is a standalone CLI client with no third-party dep
 
 The self-programming feature is split across two containers:
 
-- **Tool runner (`coder/`):** Node.js HTTP server with no LLM. Serves tool metadata and
+- **Tool runner (`tool-runner/`):** Node.js HTTP server with no LLM. Serves tool metadata and
   executes custom tools as the `toolrunner` user. Endpoints:
   - `GET /tools` — list all tools
   - `GET /tools/:name` — get tool manifest
   - `POST /tools/:name/run` — execute a tool
-- **Claude Code container (`claude-code/`):** Python HTTP server that wraps the `claude`
+- **Claude Code container (`coder/`):** Python HTTP server that wraps the `claude`
   headless binary. Receives coding tasks and runs them asynchronously, posting results
   back to the main app via `POST /chat`. Endpoint:
   - `POST /code` — submit a coding task (returns 202 immediately)
 
-The async workflow: main app sends `POST /code` to `claude-code` → `claude-code` spawns
+The async workflow: main app sends `POST /code` to `coder` → `coder` spawns
 `claude -p` as a subprocess → on completion, posts result to `app:3000/chat` with
 `source: "coder"`.
 
-Configuration: the `claude-code` entrypoint (running as root) reads `config.toml`,
+Configuration: the `coder` entrypoint (running as root) reads `config.toml`,
 extracts `password` and `[coder].model` into `/run/coder-env` (owned by the `coder`
 user, chmod 600), then execs the server as that user. The LLM process cannot read
 `config.toml` directly.

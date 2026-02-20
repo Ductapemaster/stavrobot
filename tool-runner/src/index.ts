@@ -60,7 +60,7 @@ function handleListTools(response: http.ServerResponse): void {
   for (const entry of entries) {
     const manifest = readManifest(entry);
     if (manifest === null) {
-      console.warn(`[stavrobot-coder] Skipping ${entry}: missing or invalid manifest.json`);
+      console.warn(`[stavrobot-tool-runner] Skipping ${entry}: missing or invalid manifest.json`);
       continue;
     }
     tools.push({ name: manifest.name, description: manifest.description });
@@ -97,7 +97,7 @@ async function handleRunTool(
   const body = await readRequestBody(request);
   const toolDir = path.join(TOOLS_DIR, toolName);
 
-  console.log(`[stavrobot-coder] Running tool: ${toolName}, entrypoint: ${manifest.entrypoint}`);
+  console.log(`[stavrobot-tool-runner] Running tool: ${toolName}, entrypoint: ${manifest.entrypoint}`);
 
   const entrypoint = path.join(toolDir, manifest.entrypoint);
 
@@ -136,7 +136,7 @@ async function handleRunTool(
       // EPIPE means the child exited before reading stdin. This is not fatal
       // since the child's exit handler will report the actual error.
       if ((error as NodeJS.ErrnoException).code !== "EPIPE") {
-        console.error(`[stavrobot-coder] Tool ${toolName} stdin error: ${error.message}`);
+        console.error(`[stavrobot-tool-runner] Tool ${toolName} stdin error: ${error.message}`);
       }
     });
 
@@ -145,7 +145,7 @@ async function handleRunTool(
 
     child.on("error", (error: Error) => {
       clearTimeout(timer);
-      console.error(`[stavrobot-coder] Tool ${toolName} failed to spawn: ${error.message}`);
+      console.error(`[stavrobot-tool-runner] Tool ${toolName} failed to spawn: ${error.message}`);
       response.writeHead(500, { "Content-Type": "application/json" });
       response.end(JSON.stringify({ success: false, error: `Failed to spawn tool: ${error.message}` }));
       resolve();
@@ -155,7 +155,7 @@ async function handleRunTool(
       clearTimeout(timer);
 
       if (timedOut) {
-        console.error(`[stavrobot-coder] Tool ${toolName} timed out after ${TOOL_TIMEOUT_MS}ms`);
+        console.error(`[stavrobot-tool-runner] Tool ${toolName} timed out after ${TOOL_TIMEOUT_MS}ms`);
         response.writeHead(500, { "Content-Type": "application/json" });
         response.end(JSON.stringify({ success: false, error: "Tool execution timed out" }));
         resolve();
@@ -163,7 +163,7 @@ async function handleRunTool(
       }
 
       if (code !== 0) {
-        console.error(`[stavrobot-coder] Tool ${toolName} exited with code ${code}: ${stderr}`);
+        console.error(`[stavrobot-tool-runner] Tool ${toolName} exited with code ${code}: ${stderr}`);
         response.writeHead(500, { "Content-Type": "application/json" });
         response.end(JSON.stringify({ success: false, error: stderr }));
         resolve();
@@ -177,7 +177,7 @@ async function handleRunTool(
         output = stdout;
       }
 
-      console.log(`[stavrobot-coder] Tool ${toolName} completed successfully`);
+      console.log(`[stavrobot-tool-runner] Tool ${toolName} completed successfully`);
       response.writeHead(200, { "Content-Type": "application/json" });
       response.end(JSON.stringify({ success: true, output }));
       resolve();
@@ -192,7 +192,7 @@ async function handleRequest(
   const url = request.url ?? "/";
   const method = request.method ?? "GET";
 
-  console.log(`[stavrobot-coder] ${method} ${url}`);
+  console.log(`[stavrobot-tool-runner] ${method} ${url}`);
 
   try {
     if (method === "GET" && url === "/tools") {
@@ -215,7 +215,7 @@ async function handleRequest(
     response.writeHead(404, { "Content-Type": "application/json" });
     response.end(JSON.stringify({ error: "Not found" }));
   } catch (error) {
-    console.error("[stavrobot-coder] Error handling request:", error);
+    console.error("[stavrobot-tool-runner] Error handling request:", error);
     const errorMessage = error instanceof Error ? error.message : String(error);
     response.writeHead(500, { "Content-Type": "application/json" });
     response.end(JSON.stringify({ error: errorMessage }));
@@ -229,7 +229,7 @@ async function main(): Promise<void> {
 
   const port = process.env.PORT ? parseInt(process.env.PORT, 10) : 3001;
   server.listen(port, () => {
-    console.log(`[stavrobot-coder] Server listening on port ${port}`);
+    console.log(`[stavrobot-tool-runner] Server listening on port ${port}`);
   });
 }
 
