@@ -266,6 +266,88 @@ function migrateExistingPlugins(): void {
   }
 }
 
+// Run the plugin's init script if one exists. Tries `init`, `init.py`, and
+// `init.sh` in that order; the first executable file found is used. If none
+// exist, returns silently. Throws if the script exits non-zero or times out.
+async function runInitScript(bundleDir: string, uid: number, gid: number): Promise<void> {
+  const candidates = ["init", "init.py", "init.sh"];
+  let scriptPath: string | null = null;
+
+  for (const candidate of candidates) {
+    const candidatePath = path.join(bundleDir, candidate);
+    try {
+      fs.accessSync(candidatePath, fs.constants.X_OK);
+      scriptPath = candidatePath;
+      break;
+    } catch {
+      // Not found or not executable; try the next candidate.
+    }
+  }
+
+  if (scriptPath === null) {
+    return;
+  }
+
+  console.log(`[stavrobot-plugin-runner] Running init script: ${scriptPath}`);
+
+  await new Promise<void>((resolve, reject) => {
+    const child = spawn(scriptPath, [], {
+      cwd: bundleDir,
+      uid,
+      gid,
+      env: {
+        PATH: process.env.PATH,
+        UV_CACHE_DIR: "/tmp/uv-cache",
+        UV_PYTHON_INSTALL_DIR: "/opt/uv/python",
+      },
+    });
+
+    let stdout = "";
+    let stderr = "";
+    let timedOut = false;
+
+    const timer = setTimeout(() => {
+      timedOut = true;
+      child.kill();
+    }, TOOL_TIMEOUT_MS);
+
+    child.stdout.on("data", (chunk: Buffer) => {
+      stdout += chunk.toString("utf-8");
+    });
+
+    child.stderr.on("data", (chunk: Buffer) => {
+      stderr += chunk.toString("utf-8");
+    });
+
+    // Close stdin immediately — init scripts take no input.
+    child.stdin.end();
+
+    child.on("error", (error: Error) => {
+      clearTimeout(timer);
+      reject(new Error(`Failed to spawn init script: ${error.message}`));
+    });
+
+    child.on("close", (code: number | null) => {
+      clearTimeout(timer);
+
+      if (timedOut) {
+        const output = [stderr, stdout].filter(Boolean).join("\n");
+        reject(new Error(`Init script timed out after ${TOOL_TIMEOUT_MS}ms\n${output}`));
+        return;
+      }
+
+      if (code !== 0) {
+        const output = [stderr, stdout].filter(Boolean).join("\n");
+        reject(new Error(`Init script exited with code ${code}\n${output}`));
+        return;
+      }
+
+      console.log(`[stavrobot-plugin-runner] Init script completed successfully: ${scriptPath}`);
+      resolve();
+    });
+  });
+}
+
 function findBundle(bundleName: string): LoadedBundle | null {
   return bundles.find((bundle) => bundle.manifest.name === bundleName) ?? null;
 }
@@ -539,6 +621,18 @@ async function handleInstall(
   execFileSync("chown", ["-R", `${uid}:${gid}`, destDir], { stdio: "pipe" });
   fs.chmodSync(destDir, 0o700);
 
+  try {
+    await runInitScript(destDir, uid, gid);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(`[stavrobot-plugin-runner] Init script failed for "${pluginName}": ${message}`);
+    fs.rmSync(destDir, { recursive: true, force: true });
+    removePluginUser(pluginName);
+    response.writeHead(500, { "Content-Type": "application/json" });
+    response.end(JSON.stringify({ error: `Init script failed: ${message}` }));
+    return;
+  }
+
   loadBundles();
 
   const responseBody: Record<string, unknown> = {
@@ -621,6 +715,16 @@ async function handleUpdate(
   // Re-apply ownership after the git reset to fix any new/changed files.
   const { uid, gid } = getPluginUserIds(pluginName);
   execFileSync("chown", ["-R", `${uid}:${gid}`, pluginDir], { stdio: "pipe" });
+
+  try {
+    await runInitScript(pluginDir, uid, gid);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(`[stavrobot-plugin-runner] Init script failed for "${pluginName}" during update: ${message}`);
+    response.writeHead(500, { "Content-Type": "application/json" });
+    response.end(JSON.stringify({ error: `Init script failed: ${message}` }));
+    return;
+  }
 
   loadBundles();
 

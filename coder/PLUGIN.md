@@ -15,6 +15,7 @@ A plugin is typically a git repository. The bundle manifest lives at the reposit
 ```
 my-plugin/                 # Repository root (e.g., github.com/user/my-plugin)
 ├── manifest.json          # Bundle manifest (required, at repo root)
+├── init                   # Optional init script
 ├── my_tool/
 │   ├── manifest.json      # Tool manifest (required)
 │   └── run.py             # Entrypoint (any executable filename)
@@ -85,6 +86,35 @@ The bundle manifest can include an optional `instructions` field containing setu
 When a plugin is installed, updated, or inspected, the agent relays these instructions to the user verbatim. The agent will not follow the instructions itself.
 
 Instructions longer than 5000 characters are truncated before being shown to the user.
+
+## Init scripts
+
+The plugin-runner looks for an executable file named `init`, `init.py`, or `init.sh` (in that order) at the bundle root. The first match wins.
+
+The init script runs automatically after install and after update. It runs as the plugin's system user with the same restricted environment as tools. The working directory is the bundle root (not a tool subdirectory). It receives no stdin input and has a 30-second timeout.
+
+A non-zero exit code or a timeout fails the install or update. The script must be executable (`chmod +x`).
+
+Typical uses: downloading models, compiling native extensions, creating cache directories.
+
+### Example: init.py
+
+```python
+#!/usr/bin/env -S uv run
+# /// script
+# dependencies = []
+# ///
+
+from pathlib import Path
+
+
+def main() -> None:
+    """Create a cache directory for the plugin."""
+    Path("cache").mkdir(exist_ok=True)
+
+
+main()
+```
 
 ## Tool manifest
 

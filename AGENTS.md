@@ -210,6 +210,10 @@ extracts `password` and `[coder].model` into `/run/coder-env` (owned by the `cod
 user, chmod 600), then execs the server as that user. The LLM process cannot read
 `config.toml` directly.
 
+When changing the plugin system (plugin-runner endpoints, manifest schema, runtime
+environment, lifecycle hooks, etc.), update `coder/PLUGIN.md` to reflect the changes.
+This file is the plugin authoring guide used by the coder agent.
+
 ## Pi library versions
 
 - Only the main app (`package.json`) depends on packages from the Pi mono repo. The
