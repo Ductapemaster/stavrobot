@@ -59,12 +59,12 @@ model = "gpt-4o-transcribe"
 # sub-agent search calls. Uncomment to activate.
 # [webSearch]
 # apiKey = "your-anthropic-api-key-here"
-# model = "claude-haiku-4-20250514"
+# model = "claude-sonnet-4-6"
 
 # Optional. Enables the web_fetch tool. Same pattern as webSearch. Uncomment to activate.
 # [webFetch]
 # apiKey = "your-anthropic-api-key-here"
-# model = "claude-haiku-4-20250514"
+# model = "claude-sonnet-4-6"
 
 # Enables the self-programming coder agent. Uses Claude Code headless, which
 # requires subscription auth (see README). The model must be a Claude Code
