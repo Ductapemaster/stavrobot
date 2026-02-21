@@ -8,7 +8,7 @@ RUN npm run build
 
 FROM node:22-slim
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /usr/local/bin/
-RUN apt-get update && apt-get install -y --no-install-recommends python3 python3-venv ca-certificates && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends python3 python3-venv ca-certificates git openssh-client curl build-essential && rm -rf /var/lib/apt/lists/*
 ENV UV_PYTHON_INSTALL_DIR=/opt/uv/python
 RUN uv python install
 RUN useradd --system --no-create-home toolrunner

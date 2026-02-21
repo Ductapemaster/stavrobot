@@ -109,9 +109,31 @@ Each tool subdirectory contains its own `manifest.json`:
 - `entrypoint` (string, required): The filename of the executable script inside the tool directory.
 - `parameters` (object, required): Parameter schema. Each key is a parameter name; each value has `type` (`string`, `integer`, `number`, or `boolean`) and `description`. Use an empty object `{}` if the tool takes no parameters.
 
+## Runtime environment
+
+Tools run inside the `tool-runner` Docker container, which is completely separate from the main app container. This means:
+
+- Tools cannot access the app's filesystem, source code, secrets, or config.
+- The only directory accessible to a tool is its own plugin directory (e.g., `/tools/my-plugin/`). Tools cannot read or write outside this directory.
+- Tools run as the unprivileged `toolrunner` user.
+- Tools can make outbound network requests (there is no network isolation).
+
+The following runtimes and tools are available in the container:
+
+- `uv` (with a pre-installed Python)
+- `python3`
+- `node` (Node.js 22)
+- `git`
+- `ssh` / `openssh-client`
+- `curl`
+- `build-essential` (gcc, make, etc.)
+
+The environment passed to the tool process is minimal: only `PATH`, `UV_CACHE_DIR`, and `UV_PYTHON_INSTALL_DIR` are set. Variables like `HOME`, `USER`, and `PYTHONPATH` are not set.
+
 ## How tools are called
 
-- The entrypoint is executed as a subprocess by the tool-runner container.
+- The entrypoint is executed as a subprocess inside the tool-runner container.
+- The working directory is set to the tool's own subdirectory (e.g., `/tools/my-plugin/my_tool/`).
 - Parameters are passed as a JSON object on stdin.
 - The tool must write a JSON object to stdout.
 - Exit code 0 means success; non-zero means failure.
