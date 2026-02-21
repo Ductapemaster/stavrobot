@@ -690,7 +690,7 @@ export async function handlePrompt(
       const audioBuffer = Buffer.from(audio, "base64");
       const resolvedContentType = audioContentType ?? "audio/ogg";
       const transcription = await transcribeAudio(audioBuffer, config.stt, resolvedContentType);
-      const voiceNote = `[Voice note]: ${transcription}`;
+      const voiceNote = `[Voice note transcript]: ${transcription}`;
       resolvedMessage = resolvedMessage !== undefined ? `${resolvedMessage}\n${voiceNote}` : voiceNote;
     } else {
       console.warn("[stavrobot] Audio received but [stt] is not configured; ignoring audio.");
