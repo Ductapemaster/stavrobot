@@ -97,6 +97,7 @@ services:
 
   signal-bridge:
     build: ./signal-bridge
+    profiles: ["signal"]
     mem_limit: 256m
     restart: unless-stopped
     volumes:

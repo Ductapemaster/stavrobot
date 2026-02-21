@@ -53,12 +53,15 @@ The `coder` container uses Claude Code with subscription auth (OAuth), separate 
 
 ### Signal setup
 
-1. Start the containers: `docker compose up --build`
-2. Exec into the signal-bridge container: `docker compose exec signal-bridge bash`
-3. Register: `signal-cli -u +YOUR_NUMBER register`
-4. Verify with the code you receive: `signal-cli -u +YOUR_NUMBER verify CODE`
-5. Set `[signal].account` and `[signal].allowedNumbers` in your config.
-6. See the [signal-cli quickstart](https://github.com/AsamK/signal-cli/wiki/Quickstart) for details.
+Signal requires a **separate phone number** — not your personal one. A prepaid SIM or VoIP number works.
+
+1. Uncomment `COMPOSE_PROFILES=signal` in your `.env` file to enable the signal-bridge container.
+2. Start the containers: `docker compose up --build`
+3. Exec into the signal-bridge container: `docker compose exec signal-bridge bash`
+4. Register: `signal-cli -u +YOUR_NUMBER register`
+5. Verify with the code you receive: `signal-cli -u +YOUR_NUMBER verify CODE`
+6. Set `[signal].account` and `[signal].allowedNumbers` in your config.
+7. See the [signal-cli quickstart](https://github.com/AsamK/signal-cli/wiki/Quickstart) for details.
 
 ### Telegram setup
 

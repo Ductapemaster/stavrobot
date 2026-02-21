@@ -33,6 +33,7 @@ services:
       - ./scripts:/scripts:ro
       - {{ HM_DATA_DIR }}/db-backups:/backups
   signal-bridge:
+    profiles: ["signal"]
     volumes:
       - {{ HM_DATA_DIR }}/main/config.toml:/app/config.toml:ro
       - {{ HM_DATA_DIR }}/signal-cli:/root/.local/share/signal-cli
