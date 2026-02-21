@@ -7,7 +7,7 @@ A personal AI assistant with persistent memory, sandboxed code execution, and Si
 ## Features
 
 - **Security.** The bot runs in isolated containers with no access to the host system. Code execution is sandboxed with no access to secrets. Signal and Telegram allowlists restrict who can interact with the agent. You can run it on your personal PC with no fear.
-- **Plugins.** Install plugins and extend Stavrobot's capabilities by just giving it a git repo URL.
+- **Plugins.** Install plugins and extend Stavrobot's capabilities by just giving it a git repo URL. Plugins are isolated from each other — each runs as a dedicated system user with no access to other plugins' files or configuration.
 - **Signal integration.** Two-way messaging via signal-cli, including voice note transcription (OpenAI STT).
 - **Telegram integration.** Two-way messaging via a Telegram bot webhook, including voice note transcription (OpenAI STT).
 - **Two-tier memory.** Tier 1: a self-managed memory store injected into the system prompt every turn (the agent decides what to remember). Tier 2: full read/write access to a PostgreSQL database via unrestricted SQL — the agent can create tables, query, and store anything.

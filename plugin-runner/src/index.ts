@@ -1,25 +1,67 @@
 import http from "http";
 import fs from "fs";
 import path from "path";
-import { execSync, execFileSync, spawn } from "child_process";
+import { execFileSync, spawn } from "child_process";
 
 const PLUGINS_DIR = "/plugins";
 const TOOL_TIMEOUT_MS = 30_000;
 const INSTRUCTIONS_MAX_LENGTH = 5000;
 
-let pluginRunnerUid: number | undefined;
-let pluginRunnerGid: number | undefined;
+// Maximum length of a Unix username on Linux is 32 characters.
+const MAX_USERNAME_LENGTH = 32;
 
-function getPluginRunnerIds(): { uid: number; gid: number } {
-  if (pluginRunnerUid === undefined || pluginRunnerGid === undefined) {
-    try {
-      pluginRunnerUid = parseInt(execSync("id -u pluginrunner").toString().trim(), 10);
-      pluginRunnerGid = parseInt(execSync("id -g pluginrunner").toString().trim(), 10);
-    } catch {
-      throw new Error("pluginrunner user not found — requires the Docker container environment");
+// Derive a deterministic, valid Unix username for a plugin. The prefix "plug_"
+// is 5 characters, leaving 27 for the plugin name. Plugin names are guaranteed
+// to be [a-z0-9-], so only hyphens need replacing (Unix usernames disallow them).
+function derivePluginUsername(pluginName: string): string {
+  const sanitized = pluginName
+    .replace(/-/g, "_")
+    .slice(0, MAX_USERNAME_LENGTH - "plug_".length);
+  return `plug_${sanitized}`;
+}
+
+// Create the system user for a plugin if it doesn't already exist, then return
+// its uid/gid. Using --system and --no-create-home keeps the user minimal.
+function ensurePluginUser(pluginName: string): { uid: number; gid: number } {
+  const username = derivePluginUsername(pluginName);
+  try {
+    execFileSync("useradd", ["--system", "--no-create-home", username], { stdio: "pipe" });
+    console.log(`[stavrobot-plugin-runner] Created system user "${username}" for plugin "${pluginName}"`);
+  } catch (error) {
+    // useradd exits with code 9 when the user already exists; treat that as success.
+    const exitCode = (error as NodeJS.ErrnoException & { status?: number }).status;
+    if (exitCode !== 9) {
+      throw error;
     }
   }
-  return { uid: pluginRunnerUid, gid: pluginRunnerGid };
+  return getPluginUserIds(pluginName);
+}
+
+// Delete the system user for a plugin. Silently succeeds if the user doesn't exist.
+function removePluginUser(pluginName: string): void {
+  const username = derivePluginUsername(pluginName);
+  try {
+    execFileSync("userdel", [username], { stdio: "pipe" });
+    console.log(`[stavrobot-plugin-runner] Removed system user "${username}" for plugin "${pluginName}"`);
+  } catch (error) {
+    // userdel exits with code 6 when the user doesn't exist; treat that as success.
+    const exitCode = (error as NodeJS.ErrnoException & { status?: number }).status;
+    if (exitCode !== 6) {
+      throw error;
+    }
+  }
+}
+
+// Look up uid/gid for an existing plugin user. Throws if the user doesn't exist.
+function getPluginUserIds(pluginName: string): { uid: number; gid: number } {
+  const username = derivePluginUsername(pluginName);
+  try {
+    const uid = parseInt(execFileSync("id", ["-u", username], { stdio: "pipe" }).toString().trim(), 10);
+    const gid = parseInt(execFileSync("id", ["-g", username], { stdio: "pipe" }).toString().trim(), 10);
+    return { uid, gid };
+  } catch {
+    throw new Error(`Plugin user "${username}" not found — requires the Docker container environment`);
+  }
 }
 
 interface BundleManifest {
@@ -165,6 +207,65 @@ function loadBundles(): void {
   bundles = loadedBundles;
 }
 
+// Ensure every existing plugin has a dedicated system user and correct
+// ownership/permissions. Runs once on startup to handle plugins installed
+// before this feature was introduced.
+function migrateExistingPlugins(): void {
+  let topLevelEntries: string[];
+  try {
+    topLevelEntries = fs.readdirSync(PLUGINS_DIR);
+  } catch {
+    // No plugins directory yet; nothing to migrate.
+    return;
+  }
+
+  for (const bundleDirName of topLevelEntries) {
+    // Skip temp directories created during install.
+    if (bundleDirName.startsWith(".tmp-install-")) {
+      continue;
+    }
+
+    const bundleDir = path.join(PLUGINS_DIR, bundleDirName);
+    let stat: fs.Stats;
+    try {
+      stat = fs.statSync(bundleDir);
+    } catch {
+      continue;
+    }
+    if (!stat.isDirectory()) {
+      continue;
+    }
+
+    const manifestPath = path.join(bundleDir, "manifest.json");
+    const rawManifest = readJsonFile(manifestPath);
+    if (!isBundleManifest(rawManifest)) {
+      continue;
+    }
+
+    const pluginName = rawManifest.name;
+
+    // Skip plugins whose names don't conform to the allowlist. They will still
+    // load and run, but won't get user isolation until reinstalled with a
+    // conforming name.
+    if (!/^[a-z0-9-]+$/.test(pluginName)) {
+      console.warn(
+        `[stavrobot-plugin-runner] Skipping migration for plugin "${pluginName}": name does not match [a-z0-9-]+`
+      );
+      continue;
+    }
+
+    try {
+      const { uid, gid } = ensurePluginUser(pluginName);
+      execFileSync("chown", ["-R", `${uid}:${gid}`, bundleDir], { stdio: "pipe" });
+      fs.chmodSync(bundleDir, 0o700);
+      console.log(`[stavrobot-plugin-runner] Migrated plugin "${pluginName}" to user "${derivePluginUsername(pluginName)}"`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error(`[stavrobot-plugin-runner] Failed to migrate plugin "${pluginName}": ${message}`);
+    }
+  }
+}
+
 function findBundle(bundleName: string): LoadedBundle | null {
   return bundles.find((bundle) => bundle.manifest.name === bundleName) ?? null;
 }
@@ -246,7 +347,7 @@ async function handleRunTool(
   );
 
   const entrypoint = path.join(toolDir, manifest.entrypoint);
-  const { uid, gid } = getPluginRunnerIds();
+  const { uid, gid } = getPluginUserIds(bundleName);
 
   await new Promise<void>((resolve) => {
     const child = spawn(entrypoint, [], {
@@ -398,17 +499,16 @@ async function handleInstall(
 
   const pluginName = rawManifest.name;
 
-  // Reject names that could escape PLUGINS_DIR via path traversal.
-  if (
-    pluginName === "" ||
-    pluginName === "." ||
-    pluginName.includes("..") ||
-    pluginName.includes("/") ||
-    pluginName.includes("\\")
-  ) {
+  // Allowlist rather than denylist: this eliminates path traversal, shell
+  // injection, and username derivation edge cases in a single check.
+  if (!/^[a-z0-9-]+$/.test(pluginName)) {
     fs.rmSync(tempDir, { recursive: true, force: true });
     response.writeHead(400, { "Content-Type": "application/json" });
-    response.end(JSON.stringify({ error: `Invalid plugin name: "${pluginName}"` }));
+    response.end(
+      JSON.stringify({
+        error: `Invalid plugin name "${pluginName}": only lowercase letters, digits, and hyphens are allowed`,
+      })
+    );
     return;
   }
 
@@ -434,6 +534,10 @@ async function handleInstall(
     // Clean up the temp dir if it still exists (i.e., renameSync did not move it).
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
+
+  const { uid, gid } = ensurePluginUser(pluginName);
+  execFileSync("chown", ["-R", `${uid}:${gid}`, destDir], { stdio: "pipe" });
+  fs.chmodSync(destDir, 0o700);
 
   loadBundles();
 
@@ -513,6 +617,10 @@ async function handleUpdate(
   console.log(`[stavrobot-plugin-runner] Updating plugin "${pluginName}" in ${pluginDir}`);
   execFileSync("git", ["-C", pluginDir, "fetch", "--all"]);
   execFileSync("git", ["-C", pluginDir, "reset", "--hard", "origin/HEAD"]);
+
+  // Re-apply ownership after the git reset to fix any new/changed files.
+  const { uid, gid } = getPluginUserIds(pluginName);
+  execFileSync("chown", ["-R", `${uid}:${gid}`, pluginDir], { stdio: "pipe" });
 
   loadBundles();
 
@@ -598,6 +706,7 @@ async function handleRemove(
 
   console.log(`[stavrobot-plugin-runner] Removing plugin "${pluginName}" from ${pluginDir}`);
   fs.rmSync(pluginDir, { recursive: true, force: true });
+  removePluginUser(pluginName);
 
   loadBundles();
 
@@ -679,6 +788,10 @@ async function handleConfigure(
 
   fs.writeFileSync(configPath, JSON.stringify(mergedConfig, null, 2));
 
+  // Fix ownership of config.json so the plugin user can read it.
+  const { uid, gid } = getPluginUserIds(pluginName);
+  fs.chownSync(configPath, uid, gid);
+
   console.log(`[stavrobot-plugin-runner] Configured plugin "${pluginName}"`);
   response.writeHead(200, { "Content-Type": "application/json" });
   response.end(JSON.stringify({
@@ -745,6 +858,7 @@ async function handleRequest(
 }
 
 async function main(): Promise<void> {
+  migrateExistingPlugins();
   loadBundles();
 
   const server = http.createServer((request: http.IncomingMessage, response: http.ServerResponse): void => {
