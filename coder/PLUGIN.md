@@ -95,6 +95,8 @@ The init script runs automatically after install and after update. It runs as th
 
 A non-zero exit code or a timeout fails the install or update. The script must be executable (`chmod +x`).
 
+Anything the init script writes to stdout is captured and returned to the agent as `init_output` in the install/update response. Use this to report setup results, generated credentials, or other information the agent should see.
+
 Typical uses: downloading models, compiling native extensions, creating cache directories.
 
 ### Example: init.py
