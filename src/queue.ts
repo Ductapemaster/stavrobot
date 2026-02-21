@@ -65,6 +65,9 @@ async function processQueue(): Promise<void> {
           }
         }
         entry.resolve(loginMessage);
+      } else if (errorMessage.includes("400 {")) {
+        console.error(`[stavrobot] Non-retryable API error (400 client error), not retrying: ${errorMessage}`);
+        entry.resolve("Something went wrong processing your message. Please try again.");
       } else if (entry.retries < MAX_RETRIES) {
         const attempt = entry.retries + 1;
         console.log(`[stavrobot] Message failed (attempt ${attempt}/${MAX_RETRIES + 1}), retrying in ${RETRY_DELAY_MS / 1000}s: ${errorMessage}`);

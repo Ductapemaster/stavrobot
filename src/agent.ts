@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import pg from "pg";
-import { Type, getModel, type TextContent, type ImageContent, complete } from "@mariozechner/pi-ai";
+import { Type, getModel, type TextContent, type ImageContent, type AssistantMessage, complete } from "@mariozechner/pi-ai";
 import { Agent, type AgentTool, type AgentToolResult, type AgentMessage } from "@mariozechner/pi-agent-core";
 import type { Config, TelegramConfig, TtsConfig } from "./config.js";
 import type { FileAttachment } from "./uploads.js";
@@ -734,6 +734,12 @@ export async function handlePrompt(
   const unsubscribe = agent.subscribe((event) => {
     if (event.type === "message_end") {
       const message = event.message;
+      if (message.role === "assistant") {
+        const assistantMessage = message as unknown as AssistantMessage;
+        if (assistantMessage.stopReason === "error" || assistantMessage.stopReason === "aborted") {
+          return;
+        }
+      }
       if (
         message.role === "user" ||
         message.role === "assistant" ||
@@ -758,6 +764,17 @@ export async function handlePrompt(
   if (agent.state.error) {
     const errorJson = JSON.stringify(agent.state.error);
     console.error("[stavrobot] Agent error:", errorJson);
+    // Remove error/aborted assistant messages from in-memory state so the next
+    // prompt starts clean. These messages are stripped by the library's
+    // transformMessages anyway, but leaving them in state can orphan adjacent
+    // toolResult messages and cause 400 errors on subsequent prompts.
+    const cleanedMessages = agent.state.messages.filter((message) => {
+      if (message.role !== "assistant") return true;
+      const assistantMessage = message as unknown as AssistantMessage;
+      return assistantMessage.stopReason !== "error" && assistantMessage.stopReason !== "aborted";
+    });
+    agent.replaceMessages(cleanedMessages);
+    agent.state.error = undefined;
     throw new Error(`Agent error: ${errorJson}`);
   }
 
@@ -780,18 +797,19 @@ export async function handlePrompt(
     const currentMessages = agent.state.messages.slice();
     void (async () => {
       try {
-        // Advance the cut point past any leading toolResult messages so we never
-        // split a tool-use/tool-result pair across the compaction boundary.
+        // Advance the cut point to the next user message. A user message is always a
+        // safe compaction boundary: it is never part of a tool-use/tool-result pair and
+        // is never stripped by the library's transformMessages. Landing on an assistant
+        // message risks orphaning a toolResult that follows it, which the Anthropic API
+        // rejects with a 400 error.
         let cutIndex = currentMessages.length - 20;
-        while (cutIndex < currentMessages.length && currentMessages[cutIndex].role === "toolResult") {
+        while (cutIndex < currentMessages.length && currentMessages[cutIndex].role !== "user") {
           cutIndex++;
         }
 
-        // If every message in the tail window is a toolResult, cutIndex has advanced
-        // past the end of the array. keepCount would be 0, causing OFFSET -1 in the
-        // SQL query, which is a PostgreSQL error. Skip compaction for this turn.
+        // If no user message was found in the tail window, skip compaction for this turn.
         if (cutIndex >= currentMessages.length) {
-          console.warn("[stavrobot] Compaction skipped: all tail messages are toolResult, no safe cut point found.");
+          console.warn("[stavrobot] Compaction skipped: no user message found in tail window, no safe cut point found.");
           return;
         }
 
