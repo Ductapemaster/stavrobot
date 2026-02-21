@@ -427,6 +427,19 @@ async function main(): Promise<void> {
   server.listen(port, () => {
     console.log(`Server listening on port ${port}`);
   });
+
+  const internalServer = http.createServer((request: http.IncomingMessage, response: http.ServerResponse): void => {
+    if (request.method === "POST" && new URL(request.url || "/", "http://localhost").pathname === "/chat") {
+      void handleChatRequest(request, response);
+    } else {
+      response.writeHead(404, { "Content-Type": "application/json" });
+      response.end(JSON.stringify({ error: "Not found" }));
+    }
+  });
+
+  internalServer.listen(3001, () => {
+    console.log("[stavrobot] Internal server listening on port 3001");
+  });
 }
 
 // Only run main() when this file is the entry point, not when imported by tests.

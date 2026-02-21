@@ -1,6 +1,5 @@
 """HTTP server that receives coding task requests and spawns claude -p as a subprocess."""
 
-import base64
 import http.server
 import json
 import os
@@ -10,7 +9,7 @@ import urllib.request
 from http import HTTPStatus
 
 
-APP_CHAT_URL = "http://app:3000/chat"
+APP_CHAT_URL = "http://app:3001/chat"
 CODER_ENV_PATH = "/run/coder-env"
 SYSTEM_PROMPT_PATH = "/app/system-prompt.txt"
 TOOLS_DIR = "/tools/"
@@ -22,7 +21,7 @@ _claude_running = False
 
 
 def read_coder_env() -> dict[str, str]:
-    """Read password and model from the coder-env file written by entrypoint.sh."""
+    """Read model from the coder-env file written by entrypoint.sh."""
     env: dict[str, str] = {}
     with open(CODER_ENV_PATH) as f:
         for line in f:
@@ -33,8 +32,8 @@ def read_coder_env() -> dict[str, str]:
     return env
 
 
-def post_result(message: str, password: str) -> None:
-    """Post the coding task result back to the main app's /chat endpoint."""
+def post_result(message: str) -> None:
+    """Post the coding task result back to the main app's internal /chat endpoint."""
     body = json.dumps({
         "message": message,
         "source": "coder",
@@ -42,9 +41,6 @@ def post_result(message: str, password: str) -> None:
     }).encode()
 
     headers = {"Content-Type": "application/json"}
-    if password:
-        credentials = base64.b64encode(f"coder:{password}".encode()).decode()
-        headers["Authorization"] = f"Basic {credentials}"
 
     request = urllib.request.Request(
         APP_CHAT_URL,
@@ -63,7 +59,6 @@ def run_coding_task(task_id: str, message: str) -> None:
     print(f"[stavrobot-coder] Starting coding task {task_id}")
 
     env = read_coder_env()
-    password = env.get("PASSWORD", "")
     model = env["MODEL"]
 
     try:
@@ -117,7 +112,7 @@ def run_coding_task(task_id: str, message: str) -> None:
             _claude_running = False
 
     print(f"[stavrobot-coder] Posting result for task {task_id}, length: {len(result_text)}")
-    post_result(result_text, password)
+    post_result(result_text)
 
 
 class RequestHandler(http.server.BaseHTTPRequestHandler):

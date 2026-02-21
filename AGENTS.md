@@ -211,8 +211,8 @@ user, chmod 600), then execs the server as that user. The LLM process cannot rea
 `config.toml` directly.
 
 When changing the plugin system (plugin-runner endpoints, manifest schema, runtime
-environment, lifecycle hooks, etc.), update `coder/PLUGIN.md` to reflect the changes.
-This file is the plugin authoring guide used by the coder agent.
+environment, lifecycle hooks, etc.), ALWAYS update `coder/PLUGIN.md` to reflect the
+changes.  This file is the plugin authoring guide used by the coder agent.
 
 ## Pi library versions
 
@@ -270,3 +270,7 @@ This file is the plugin authoring guide used by the coder agent.
 - No emojis unless explicitly requested.
 - If unsure what to do, stop and ask for instructions rather than guessing.
 - When adding new features, present a plan and ask for confirmation before implementing.
+- When implementing a feature that involves an architectural decision made during
+  discussion with the user, record it in `DECISIONLOG.md` at the project root. Only
+  record decisions that come from user discussion, not decisions you make yourself. Update
+  this file whenever a new decision is implemented.

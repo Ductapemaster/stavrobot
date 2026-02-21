@@ -10,12 +10,10 @@ import tomllib
 with open("/config/config.toml", "rb") as f:
     config = tomllib.load(f)
 
-password = config.get("password", "")
 coder_section = config.get("coder", {})
 model = coder_section["model"]
 
 with open("/run/coder-env", "w") as f:
-    f.write(f"PASSWORD={password}\n")
     f.write(f"MODEL={model}\n")
 EOF
 
