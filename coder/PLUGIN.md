@@ -15,7 +15,7 @@ A plugin is typically a git repository. The bundle manifest lives at the reposit
 ```
 my-plugin/                 # Repository root (e.g., github.com/user/my-plugin)
 ├── manifest.json          # Bundle manifest (required, at repo root)
-├── init                   # Optional init script
+├── init.py                # Init script (declared in manifest)
 ├── my_tool/
 │   ├── manifest.json      # Tool manifest (required)
 │   └── run.py             # Entrypoint (any executable filename)
@@ -34,13 +34,20 @@ The `manifest.json` at the root of the plugin directory describes the bundle:
 {
   "name": "my-plugin",
   "description": "A short description of what this plugin provides.",
-  "instructions": "Optional setup notes or usage guidance for the user."
+  "instructions": "Optional setup notes or usage guidance for the user.",
+  "init": {
+    "entrypoint": "init.py",
+    "async": false
+  }
 }
 ```
 
 - `name` (string, required): The plugin's unique identifier. Used to namespace tools. Must contain only lowercase letters, digits, and hyphens (`[a-z0-9-]`).
 - `description` (string, required): A short description shown when listing bundles.
 - `instructions` (string, optional): Setup notes or usage guidance for the user. See "Plugin instructions" below.
+- `init` (object, optional): Declares an init script.
+  - `entrypoint` (string, required): The filename of the executable script at the bundle root.
+  - `async` (boolean, optional, defaults to false): If true, the init script runs in the background and does not block install/update.
 
 ## Plugin configuration
 
@@ -89,13 +96,15 @@ Instructions longer than 5000 characters are truncated before being shown to the
 
 ## Init scripts
 
-The plugin-runner looks for an executable file named `init`, `init.py`, or `init.sh` (in that order) at the bundle root. The first match wins.
+An init script is declared in the bundle manifest via the `init` field. The `entrypoint` value names the executable file at the bundle root. The script must be executable (`chmod +x`).
 
-The init script runs automatically after install and after update. It runs as the plugin's system user with the same restricted environment as tools. The working directory is the bundle root (not a tool subdirectory). It receives no stdin input and has a 30-second timeout.
-
-A non-zero exit code or a timeout fails the install or update. The script must be executable (`chmod +x`).
+The init script runs automatically after install and after update. It runs as the plugin's system user with the same restricted environment as tools. The working directory is the bundle root (not a tool subdirectory). It receives no stdin input.
 
 Anything the init script writes to stdout is captured and returned to the agent as `init_output` in the install/update response. Use this to report setup results, generated credentials, or other information the agent should see.
+
+**Sync init** (default, `"async": false`): 30-second timeout. Blocks install/update until the script exits. A non-zero exit code or timeout fails the operation.
+
+**Async init** (`"async": true`): 5-minute timeout. Does not block install/update — the operation completes immediately and the init result is delivered via callback when the script finishes. A non-zero exit code or timeout reports failure via callback.
 
 Typical uses: downloading models, compiling native extensions, creating cache directories.
 
@@ -127,6 +136,7 @@ Each tool subdirectory contains its own `manifest.json`:
   "name": "my_tool",
   "description": "What this tool does.",
   "entrypoint": "run.py",
+  "async": false,
   "parameters": {
     "param_name": {
       "type": "string",
@@ -139,7 +149,12 @@ Each tool subdirectory contains its own `manifest.json`:
 - `name` (string, required): The tool's name within the bundle.
 - `description` (string, required): Shown when inspecting the bundle.
 - `entrypoint` (string, required): The filename of the executable script inside the tool directory.
+- `async` (boolean, optional, defaults to false): If true, the tool runs asynchronously and the result is delivered via callback instead of inline.
 - `parameters` (object, required): Parameter schema. Each key is a parameter name; each value has `type` (`string`, `integer`, `number`, or `boolean`) and `description`. Use an empty object `{}` if the tool takes no parameters.
+
+### Async tools
+
+Only set `async: true` for tools that are expected to run for more than 30 seconds. Async tools add complexity because the result arrives as a separate message rather than inline, which can be disorienting for the agent. Prefer synchronous tools whenever possible.
 
 ## Runtime environment
 

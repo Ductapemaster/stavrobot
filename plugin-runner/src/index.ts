@@ -5,6 +5,8 @@ import { execFileSync, spawn } from "child_process";
 
 const PLUGINS_DIR = "/plugins";
 const TOOL_TIMEOUT_MS = 30_000;
+const ASYNC_TIMEOUT_MS = 300_000; // 5 minutes for async scripts.
+const APP_INTERNAL_URL = "http://app:3001/chat";
 const INSTRUCTIONS_MAX_LENGTH = 5000;
 
 // Maximum length of a Unix username on Linux is 32 characters.
@@ -69,26 +71,45 @@ interface BundleManifest {
   description: string;
   config?: Record<string, { description: string; required: boolean }>;
   instructions?: string;
+  init?: { entrypoint: string; async?: boolean };
 }
 
 interface ToolManifest {
   name: string;
   description: string;
   entrypoint: string;
+  async?: boolean;
   [key: string]: unknown;
 }
 
 // A bundle manifest has no entrypoint; a tool manifest does.
 function isBundleManifest(manifest: unknown): manifest is BundleManifest {
   const record = manifest as Record<string, unknown>;
-  return (
-    typeof manifest === "object" &&
-    manifest !== null &&
-    typeof record["name"] === "string" &&
-    typeof record["description"] === "string" &&
-    !("entrypoint" in manifest) &&
-    (record["instructions"] === undefined || typeof record["instructions"] === "string")
-  );
+  if (
+    typeof manifest !== "object" ||
+    manifest === null ||
+    typeof record["name"] !== "string" ||
+    typeof record["description"] !== "string" ||
+    "entrypoint" in manifest ||
+    (record["instructions"] !== undefined && typeof record["instructions"] !== "string")
+  ) {
+    return false;
+  }
+
+  if (record["init"] !== undefined) {
+    const init = record["init"];
+    if (
+      typeof init !== "object" ||
+      init === null ||
+      typeof (init as Record<string, unknown>)["entrypoint"] !== "string" ||
+      ((init as Record<string, unknown>)["async"] !== undefined &&
+        typeof (init as Record<string, unknown>)["async"] !== "boolean")
+    ) {
+      return false;
+    }
+  }
+
+  return true;
 }
 
 function isToolManifest(manifest: unknown): manifest is ToolManifest {
@@ -269,34 +290,61 @@ function migrateExistingPlugins(): void {
   }
 }
 
-// Run the plugin's init script if one exists. Tries `init`, `init.py`, and
-// `init.sh` in that order; the first executable file found is used. If none
-// exist, returns null. Returns the script's stdout on success. Throws if the
-// script exits non-zero or times out.
-async function runInitScript(bundleDir: string, uid: number, gid: number): Promise<string | null> {
-  const candidates = ["init", "init.py", "init.sh"];
-  let scriptPath: string | null = null;
-
-  for (const candidate of candidates) {
-    const candidatePath = path.join(bundleDir, candidate);
-    try {
-      fs.accessSync(candidatePath, fs.constants.X_OK);
-      scriptPath = candidatePath;
-      break;
-    } catch {
-      // Not found or not executable; try the next candidate.
-    }
+// Run the plugin's init script if one is declared in the manifest. Reads the
+// init entrypoint from manifest.init.entrypoint rather than scanning for
+// conventional filenames. Returns null if no init is declared or if the init
+// is async (the caller is responsible for spawning async init). Returns the
+// script's stdout on success. Throws if the declared script is missing or
+// not executable, or if the script exits non-zero or times out.
+async function runInitScript(bundleDir: string, manifest: BundleManifest, uid: number, gid: number): Promise<string | null> {
+  if (manifest.init === undefined) {
+    return null;
   }
 
-  if (scriptPath === null) {
+  // Async init is handled by the caller after the HTTP response is sent.
+  if (manifest.init.async === true) {
     return null;
+  }
+
+  const scriptPath = path.join(bundleDir, manifest.init.entrypoint);
+
+  try {
+    fs.accessSync(scriptPath, fs.constants.X_OK);
+  } catch {
+    throw new Error(`Init script declared in manifest not found or not executable: ${scriptPath}`);
   }
 
   console.log(`[stavrobot-plugin-runner] Running init script: ${scriptPath}`);
 
-  return await new Promise<string>((resolve, reject) => {
-    const child = spawn(scriptPath, [], {
-      cwd: bundleDir,
+  const result = await runScript(scriptPath, bundleDir, uid, gid, "", TOOL_TIMEOUT_MS);
+
+  if (!result.success) {
+    throw new Error(result.error ?? result.output);
+  }
+
+  console.log(`[stavrobot-plugin-runner] Init script completed successfully: ${scriptPath}`);
+  return result.output;
+}
+
+interface ScriptResult {
+  success: boolean;
+  output: string;
+  error?: string;
+  timedOut?: boolean;
+  spawnFailed?: boolean;
+}
+
+async function runScript(
+  entrypoint: string,
+  cwd: string,
+  uid: number,
+  gid: number,
+  stdin: string,
+  timeoutMs: number,
+): Promise<ScriptResult> {
+  return new Promise<ScriptResult>((resolve) => {
+    const child = spawn(entrypoint, [], {
+      cwd,
       uid,
       gid,
       env: {
@@ -313,7 +361,7 @@ async function runInitScript(bundleDir: string, uid: number, gid: number): Promi
     const timer = setTimeout(() => {
       timedOut = true;
       child.kill();
-    }, TOOL_TIMEOUT_MS);
+    }, timeoutMs);
 
     child.stdout.on("data", (chunk: Buffer) => {
       stdout += chunk.toString("utf-8");
@@ -323,33 +371,59 @@ async function runInitScript(bundleDir: string, uid: number, gid: number): Promi
       stderr += chunk.toString("utf-8");
     });
 
-    // Close stdin immediately — init scripts take no input.
+    child.stdin.on("error", (error: Error) => {
+      // EPIPE means the child exited before reading stdin. This is not fatal
+      // since the child's exit handler will report the actual error.
+      if ((error as NodeJS.ErrnoException).code !== "EPIPE") {
+        console.error(`[stavrobot-plugin-runner] Stdin error for ${entrypoint}: ${error.message}`);
+      }
+    });
+
+    child.stdin.write(stdin);
     child.stdin.end();
 
     child.on("error", (error: Error) => {
       clearTimeout(timer);
-      reject(new Error(`Failed to spawn init script: ${error.message}`));
+      resolve({ success: false, output: "", error: `Failed to spawn script: ${error.message}`, spawnFailed: true });
     });
 
     child.on("close", (code: number | null) => {
       clearTimeout(timer);
 
       if (timedOut) {
-        const output = [stderr, stdout].filter(Boolean).join("\n");
-        reject(new Error(`Init script timed out after ${TOOL_TIMEOUT_MS}ms\n${output}`));
+        resolve({
+          success: false,
+          output: "",
+          error: `Script timed out after ${timeoutMs / 1000} seconds`,
+          timedOut: true,
+        });
         return;
       }
 
       if (code !== 0) {
-        const output = [stderr, stdout].filter(Boolean).join("\n");
-        reject(new Error(`Init script exited with code ${code}\n${output}`));
+        const combinedOutput = [stderr, stdout].filter(Boolean).join("\n");
+        resolve({ success: false, output: combinedOutput, error: combinedOutput });
         return;
       }
 
-      console.log(`[stavrobot-plugin-runner] Init script completed successfully: ${scriptPath}`);
-      resolve(stdout);
+      resolve({ success: true, output: stdout });
     });
   });
+}
+
+async function postCallback(source: string, message: string): Promise<void> {
+  console.log(`[stavrobot-plugin-runner] Posting callback from "${source}" to ${APP_INTERNAL_URL}`);
+  try {
+    const response = await fetch(APP_INTERNAL_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ source, message }),
+    });
+    console.log(`[stavrobot-plugin-runner] Callback posted, status: ${response.status}`);
+  } catch (error) {
+    const message_ = error instanceof Error ? error.message : String(error);
+    console.error(`[stavrobot-plugin-runner] Failed to post callback from "${source}": ${message_}`);
+  }
 }
 
 function findBundle(bundleName: string): LoadedBundle | null {
@@ -429,105 +503,88 @@ async function handleRunTool(
   const { toolDir, manifest } = tool;
 
   console.log(
-    `[stavrobot-plugin-runner] Running tool: ${bundleName}/${toolName}, entrypoint: ${manifest.entrypoint}`
+    `[stavrobot-plugin-runner] Running tool: ${bundleName}/${toolName}, entrypoint: ${manifest.entrypoint}, async: ${manifest.async === true}`
   );
 
   const entrypoint = path.join(toolDir, manifest.entrypoint);
   const { uid, gid } = getPluginUserIds(bundleName);
 
-  await new Promise<void>((resolve) => {
-    const child = spawn(entrypoint, [], {
-      cwd: toolDir,
-      uid,
-      gid,
-      env: {
-        PATH: process.env.PATH,
-        UV_CACHE_DIR: "/tmp/uv-cache",
-        UV_PYTHON_INSTALL_DIR: "/opt/uv/python",
-      },
-    });
+  if (manifest.async === true) {
+    response.writeHead(202, { "Content-Type": "application/json" });
+    response.end(JSON.stringify({ status: "running" }));
 
-    let stdout = "";
-    let stderr = "";
-    let timedOut = false;
-
-    const timer = setTimeout(() => {
-      timedOut = true;
-      child.kill();
-    }, TOOL_TIMEOUT_MS);
-
-    child.stdout.on("data", (chunk: Buffer) => {
-      stdout += chunk.toString("utf-8");
-    });
-
-    child.stderr.on("data", (chunk: Buffer) => {
-      stderr += chunk.toString("utf-8");
-    });
-
-    child.stdin.on("error", (error: Error) => {
-      // EPIPE means the child exited before reading stdin. This is not fatal
-      // since the child's exit handler will report the actual error.
-      if ((error as NodeJS.ErrnoException).code !== "EPIPE") {
-        console.error(
-          `[stavrobot-plugin-runner] Tool ${bundleName}/${toolName} stdin error: ${error.message}`
-        );
-      }
-    });
-
-    child.stdin.write(body);
-    child.stdin.end();
-
-    child.on("error", (error: Error) => {
-      clearTimeout(timer);
-      console.error(
-        `[stavrobot-plugin-runner] Tool ${bundleName}/${toolName} failed to spawn: ${error.message}`
-      );
-      response.writeHead(500, { "Content-Type": "application/json" });
-      response.end(
-        JSON.stringify({ success: false, error: `Failed to spawn tool: ${error.message}` })
-      );
-      resolve();
-    });
-
-    child.on("close", (code: number | null) => {
-      clearTimeout(timer);
-
-      if (timedOut) {
-        console.error(
-          `[stavrobot-plugin-runner] Tool ${bundleName}/${toolName} timed out after ${TOOL_TIMEOUT_MS}ms`
-        );
-        response.writeHead(500, { "Content-Type": "application/json" });
-        response.end(JSON.stringify({ success: false, error: "Tool execution timed out" }));
-        resolve();
-        return;
-      }
-
-      if (code !== 0) {
-        // Include both streams: the script may write error details to stdout
-        // (e.g., JSON error objects) while uv or other tooling writes to stderr.
-        const error = [stderr, stdout].filter(Boolean).join("\n");
-        console.error(
-          `[stavrobot-plugin-runner] Tool ${bundleName}/${toolName} exited with code ${code}: ${error}`
-        );
-        response.writeHead(500, { "Content-Type": "application/json" });
-        response.end(JSON.stringify({ success: false, error }));
-        resolve();
-        return;
-      }
-
-      let output: unknown;
+    void (async () => {
+      const source = `plugin:${bundleName}/${toolName}`;
+      let result: ScriptResult;
       try {
-        output = JSON.parse(stdout);
-      } catch {
-        output = stdout;
+        result = await runScript(entrypoint, toolDir, uid, gid, body, ASYNC_TIMEOUT_MS);
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        console.error(`[stavrobot-plugin-runner] Async tool ${bundleName}/${toolName} threw unexpectedly: ${errorMessage}`);
+        await postCallback(
+          source,
+          `The run of tool "${toolName}" (plugin "${bundleName}") failed:\n\`\`\`\n${errorMessage}\n\`\`\``
+        );
+        return;
       }
 
-      console.log(`[stavrobot-plugin-runner] Tool ${bundleName}/${toolName} completed successfully`);
-      response.writeHead(200, { "Content-Type": "application/json" });
-      response.end(JSON.stringify({ success: true, output }));
-      resolve();
-    });
-  });
+      if (result.success) {
+        console.log(`[stavrobot-plugin-runner] Async tool ${bundleName}/${toolName} completed successfully`);
+        await postCallback(
+          source,
+          `The run of tool "${toolName}" (plugin "${bundleName}") returned:\n\`\`\`\n${result.output}\n\`\`\``
+        );
+      } else {
+        // Distinguish timeout from other failures for a clearer error message.
+        const errorText = result.timedOut === true
+          ? `Tool "${toolName}" (plugin "${bundleName}") exceeded the timeout of ${ASYNC_TIMEOUT_MS / 1000} seconds`
+          : (result.error ?? result.output);
+        console.error(`[stavrobot-plugin-runner] Async tool ${bundleName}/${toolName} failed: ${errorText}`);
+        await postCallback(
+          source,
+          `The run of tool "${toolName}" (plugin "${bundleName}") failed:\n\`\`\`\n${errorText}\n\`\`\``
+        );
+      }
+    })();
+
+    return;
+  }
+
+  const result = await runScript(entrypoint, toolDir, uid, gid, body, TOOL_TIMEOUT_MS);
+
+  if (!result.success) {
+    if (result.spawnFailed === true) {
+      console.error(`[stavrobot-plugin-runner] Tool ${bundleName}/${toolName} failed to spawn: ${result.error}`);
+      response.writeHead(500, { "Content-Type": "application/json" });
+      response.end(JSON.stringify({ success: false, error: result.error }));
+      return;
+    }
+
+    if (result.timedOut === true) {
+      console.error(`[stavrobot-plugin-runner] Tool ${bundleName}/${toolName} timed out after ${TOOL_TIMEOUT_MS}ms`);
+      response.writeHead(500, { "Content-Type": "application/json" });
+      response.end(JSON.stringify({ success: false, error: "Tool execution timed out" }));
+      return;
+    }
+
+    // Include both streams: the script may write error details to stdout
+    // (e.g., JSON error objects) while uv or other tooling writes to stderr.
+    console.error(`[stavrobot-plugin-runner] Tool ${bundleName}/${toolName} failed: ${result.error}`);
+    response.writeHead(500, { "Content-Type": "application/json" });
+    response.end(JSON.stringify({ success: false, error: result.error }));
+    return;
+  }
+
+  let output: unknown;
+  try {
+    output = JSON.parse(result.output);
+  } catch {
+    output = result.output;
+  }
+
+  console.log(`[stavrobot-plugin-runner] Tool ${bundleName}/${toolName} completed successfully`);
+  response.writeHead(200, { "Content-Type": "application/json" });
+  response.end(JSON.stringify({ success: true, output }));
 }
 
 async function handleInstall(
@@ -625,17 +682,21 @@ async function handleInstall(
   execFileSync("chown", ["-R", `${uid}:${gid}`, destDir], { stdio: "pipe" });
   fs.chmodSync(destDir, 0o700);
 
+  const isAsyncInit = rawManifest.init?.async === true;
+
   let initOutput: string | null = null;
-  try {
-    initOutput = await runInitScript(destDir, uid, gid);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    console.error(`[stavrobot-plugin-runner] Init script failed for "${pluginName}": ${message}`);
-    fs.rmSync(destDir, { recursive: true, force: true });
-    removePluginUser(pluginName);
-    response.writeHead(500, { "Content-Type": "application/json" });
-    response.end(JSON.stringify({ error: `Init script failed: ${message}` }));
-    return;
+  if (!isAsyncInit) {
+    try {
+      initOutput = await runInitScript(destDir, rawManifest, uid, gid);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error(`[stavrobot-plugin-runner] Init script failed for "${pluginName}": ${message}`);
+      fs.rmSync(destDir, { recursive: true, force: true });
+      removePluginUser(pluginName);
+      response.writeHead(500, { "Content-Type": "application/json" });
+      response.end(JSON.stringify({ error: `Init script failed: ${message}` }));
+      return;
+    }
   }
 
   loadBundles();
@@ -671,6 +732,10 @@ async function handleInstall(
     );
   }
 
+  if (isAsyncInit) {
+    messageParts.push("Init script is running in the background. You will be notified when it completes.");
+  }
+
   if (initOutput) {
     responseBody["init_output"] = initOutput;
   }
@@ -680,6 +745,43 @@ async function handleInstall(
   console.log(`[stavrobot-plugin-runner] Installed plugin "${pluginName}"`);
   response.writeHead(200, { "Content-Type": "application/json" });
   response.end(JSON.stringify(responseBody));
+
+  if (isAsyncInit && rawManifest.init !== undefined) {
+    const entrypoint = path.join(destDir, rawManifest.init.entrypoint);
+    const source = `plugin:${pluginName}/init`;
+    void (async () => {
+      console.log(`[stavrobot-plugin-runner] Running async init script for "${pluginName}": ${entrypoint}`);
+      let result: ScriptResult;
+      try {
+        result = await runScript(entrypoint, destDir, uid, gid, "", ASYNC_TIMEOUT_MS);
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        console.error(`[stavrobot-plugin-runner] Async init for "${pluginName}" threw unexpectedly: ${errorMessage}`);
+        await postCallback(
+          source,
+          `Init script for plugin "${pluginName}" failed:\n\`\`\`\n${errorMessage}\n\`\`\``
+        );
+        return;
+      }
+
+      if (result.success) {
+        console.log(`[stavrobot-plugin-runner] Async init for "${pluginName}" completed successfully`);
+        await postCallback(
+          source,
+          `Init script for plugin "${pluginName}" completed.\n${messageParts.join(" ")}\n\nInit output:\n\`\`\`\n${result.output}\n\`\`\``
+        );
+      } else {
+        const errorText = result.timedOut === true
+          ? `Init script for plugin "${pluginName}" exceeded the timeout of ${ASYNC_TIMEOUT_MS / 1000} seconds`
+          : (result.error ?? result.output);
+        console.error(`[stavrobot-plugin-runner] Async init for "${pluginName}" failed: ${errorText}`);
+        await postCallback(
+          source,
+          `Init script for plugin "${pluginName}" failed:\n\`\`\`\n${errorText}\n\`\`\``
+        );
+      }
+    })();
+  }
 }
 
 async function handleUpdate(
@@ -725,15 +827,25 @@ async function handleUpdate(
   const { uid, gid } = getPluginUserIds(pluginName);
   execFileSync("chown", ["-R", `${uid}:${gid}`, pluginDir], { stdio: "pipe" });
 
+  // Read the manifest from disk after the git reset so we have the updated
+  // init config before loadBundles() is called.
+  const updatedRawManifest = readJsonFile(path.join(pluginDir, "manifest.json"));
+
+  const isAsyncInit = isBundleManifest(updatedRawManifest) && updatedRawManifest.init?.async === true;
+
   let initOutput: string | null = null;
-  try {
-    initOutput = await runInitScript(pluginDir, uid, gid);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    console.error(`[stavrobot-plugin-runner] Init script failed for "${pluginName}" during update: ${message}`);
-    response.writeHead(500, { "Content-Type": "application/json" });
-    response.end(JSON.stringify({ error: `Init script failed: ${message}` }));
-    return;
+  if (!isBundleManifest(updatedRawManifest)) {
+    console.warn(`[stavrobot-plugin-runner] Manifest invalid after update for "${pluginName}"; skipping init`);
+  } else if (!isAsyncInit) {
+    try {
+      initOutput = await runInitScript(pluginDir, updatedRawManifest, uid, gid);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error(`[stavrobot-plugin-runner] Init script failed for "${pluginName}" during update: ${message}`);
+      response.writeHead(500, { "Content-Type": "application/json" });
+      response.end(JSON.stringify({ error: `Init script failed: ${message}` }));
+      return;
+    }
   }
 
   loadBundles();
@@ -776,6 +888,10 @@ async function handleUpdate(
     }
   }
 
+  if (isAsyncInit) {
+    messageParts.push("Init script is running in the background. You will be notified when it completes.");
+  }
+
   if (initOutput) {
     responseBody["init_output"] = initOutput;
   }
@@ -785,6 +901,43 @@ async function handleUpdate(
   console.log(`[stavrobot-plugin-runner] Updated plugin "${pluginName}"`);
   response.writeHead(200, { "Content-Type": "application/json" });
   response.end(JSON.stringify(responseBody));
+
+  if (isAsyncInit && isBundleManifest(updatedRawManifest) && updatedRawManifest.init !== undefined) {
+    const entrypoint = path.join(pluginDir, updatedRawManifest.init.entrypoint);
+    const source = `plugin:${pluginName}/init`;
+    void (async () => {
+      console.log(`[stavrobot-plugin-runner] Running async init script for "${pluginName}": ${entrypoint}`);
+      let result: ScriptResult;
+      try {
+        result = await runScript(entrypoint, pluginDir, uid, gid, "", ASYNC_TIMEOUT_MS);
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        console.error(`[stavrobot-plugin-runner] Async init for "${pluginName}" threw unexpectedly: ${errorMessage}`);
+        await postCallback(
+          source,
+          `Init script for plugin "${pluginName}" failed:\n\`\`\`\n${errorMessage}\n\`\`\``
+        );
+        return;
+      }
+
+      if (result.success) {
+        console.log(`[stavrobot-plugin-runner] Async init for "${pluginName}" completed successfully`);
+        await postCallback(
+          source,
+          `Init script for plugin "${pluginName}" completed.\n${messageParts.join(" ")}\n\nInit output:\n\`\`\`\n${result.output}\n\`\`\``
+        );
+      } else {
+        const errorText = result.timedOut === true
+          ? `Init script for plugin "${pluginName}" exceeded the timeout of ${ASYNC_TIMEOUT_MS / 1000} seconds`
+          : (result.error ?? result.output);
+        console.error(`[stavrobot-plugin-runner] Async init for "${pluginName}" failed: ${errorText}`);
+        await postCallback(
+          source,
+          `Init script for plugin "${pluginName}" failed:\n\`\`\`\n${errorText}\n\`\`\``
+        );
+      }
+    })();
+  }
 }
 
 async function handleRemove(

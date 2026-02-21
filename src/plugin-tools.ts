@@ -3,6 +3,76 @@ import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
 
 const PLUGIN_RUNNER_BASE_URL = "http://plugin-runner:3003";
 
+interface PluginRunResult {
+  success: boolean;
+  output?: unknown;
+  error?: string;
+}
+
+interface PluginInitResponse {
+  init_output?: string;
+  [key: string]: unknown;
+}
+
+function isPluginRunResult(value: unknown): value is PluginRunResult {
+  if (typeof value !== "object" || value === null) return false;
+  const obj = value as Record<string, unknown>;
+  return typeof obj["success"] === "boolean";
+}
+
+function isPluginInitResponse(value: unknown): value is PluginInitResponse {
+  return typeof value === "object" && value !== null;
+}
+
+function formatRunPluginToolResult(pluginName: string, toolName: string, responseText: string, statusCode: number): string {
+  if (statusCode === 202) {
+    return `Tool "${toolName}" (plugin "${pluginName}") is running asynchronously. The result will arrive when it completes.`;
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(responseText) as unknown;
+  } catch {
+    return responseText;
+  }
+
+  if (!isPluginRunResult(parsed)) {
+    return responseText;
+  }
+
+  if (parsed.success) {
+    const output = typeof parsed.output === "string" ? parsed.output : JSON.stringify(parsed.output);
+    return `The run of tool "${toolName}" (plugin "${pluginName}") returned:\n\`\`\`\n${output}\n\`\`\``;
+  } else {
+    const error = parsed.error ?? "Unknown error";
+    return `The run of tool "${toolName}" (plugin "${pluginName}") failed:\n\`\`\`\n${error}\n\`\`\``;
+  }
+}
+
+// Parse the install/update response JSON and return a human-readable string.
+// The plugin-runner always includes a "message" field; if "init_output" is also
+// present, it is appended in a fenced code block so the LLM can see the output.
+function formatInitResponse(responseText: string): string {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(responseText) as unknown;
+  } catch {
+    return responseText;
+  }
+
+  if (!isPluginInitResponse(parsed)) {
+    return responseText;
+  }
+
+  const message = typeof parsed["message"] === "string" ? parsed["message"] : responseText;
+
+  if (typeof parsed.init_output === "string") {
+    return `${message}\n\nInit script output:\n\`\`\`\n${parsed.init_output}\n\`\`\``;
+  }
+
+  return message;
+}
+
 export function createInstallPluginTool(): AgentTool {
   return {
     name: "install_plugin",
@@ -22,8 +92,9 @@ export function createInstallPluginTool(): AgentTool {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ url }),
       });
-      const result = await response.text();
-      console.log("[stavrobot] install_plugin result:", result.length, "characters");
+      const responseText = await response.text();
+      console.log("[stavrobot] install_plugin result:", responseText.length, "characters");
+      const result = formatInitResponse(responseText);
       return {
         content: [{ type: "text" as const, text: result }],
         details: { result },
@@ -51,8 +122,9 @@ export function createUpdatePluginTool(): AgentTool {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name }),
       });
-      const result = await response.text();
-      console.log("[stavrobot] update_plugin result:", result.length, "characters");
+      const responseText = await response.text();
+      console.log("[stavrobot] update_plugin result:", responseText.length, "characters");
+      const result = formatInitResponse(responseText);
       return {
         content: [{ type: "text" as const, text: result }],
         details: { result },
@@ -206,8 +278,9 @@ export function createRunPluginToolTool(): AgentTool {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(parsedParameters),
       });
-      const result = await response.text();
-      console.log("[stavrobot] run_plugin_tool result:", result.length, "characters");
+      const responseText = await response.text();
+      console.log("[stavrobot] run_plugin_tool result:", responseText.length, "characters");
+      const result = formatRunPluginToolResult(plugin, tool, responseText, response.status);
       return {
         content: [{ type: "text" as const, text: result }],
         details: { result },
