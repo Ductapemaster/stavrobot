@@ -25,7 +25,8 @@ See [PLUGIN.md](coder/PLUGIN.md) for everything you need to know to create a Sta
 
 ## Recommended plugins
 
-- Weather plugin: Ask Stavrobot to install https://github.com/stavrobot/plugin-weather.git
+- Google Calendar: Ask Stavrobot to install https://github.com/stavrobot/plugin-google-calendar.git
+- Weather: Ask Stavrobot to install https://github.com/stavrobot/plugin-weather.git
 - Hacker News front page: Ask Stavrobot to install https://github.com/stavrobot/plugin-hackernews.git
 
 ## Architecture
