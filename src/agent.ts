@@ -35,6 +35,11 @@ function buildPromptSuffix(publicHostname: string): string {
 // rather than queue, because queuing would compact already-compacted messages.
 let compactionInProgress = false;
 
+// Set to true when a background compaction finishes successfully. The next
+// handlePrompt call checks this flag and reloads messages from the DB so the
+// in-memory state reflects the compacted history.
+let compactionCompleted = false;
+
 export function createExecuteSqlTool(pool: pg.Pool): AgentTool {
   return {
     name: "execute_sql",
@@ -626,6 +631,13 @@ export async function handlePrompt(
   audioContentType?: string,
   attachments?: FileAttachment[]
 ): Promise<string> {
+  if (compactionCompleted) {
+    const reloadedMessages = await loadMessages(pool);
+    agent.replaceMessages(reloadedMessages);
+    compactionCompleted = false;
+    console.log(`[stavrobot] Reloaded ${reloadedMessages.length} messages after background compaction.`);
+  }
+
   const memories = await loadAllMemories(pool);
 
   const effectiveBasePrompt = (config.customPrompt !== undefined
@@ -737,24 +749,40 @@ export async function handlePrompt(
     throw new Error(`Agent error: ${errorJson}`);
   }
 
+  const lastAssistantMessage = agent.state.messages
+    .slice()
+    .reverse()
+    .find((message) => message.role === "assistant");
+
+  const responseText = lastAssistantMessage
+    ? lastAssistantMessage.content
+        .filter((block): block is TextContent => block.type === "text")
+        .map((block) => block.text)
+        .join("")
+    : "";
+
   if (agent.state.messages.length > 40 && !compactionInProgress) {
     compactionInProgress = true;
-    try {
-      const currentMessages = agent.state.messages;
+    // Snapshot the messages now so the background task works on a stable slice
+    // and never touches agent.state.messages directly.
+    const currentMessages = agent.state.messages.slice();
+    void (async () => {
+      try {
+        // Advance the cut point past any leading toolResult messages so we never
+        // split a tool-use/tool-result pair across the compaction boundary.
+        let cutIndex = currentMessages.length - 20;
+        while (cutIndex < currentMessages.length && currentMessages[cutIndex].role === "toolResult") {
+          cutIndex++;
+        }
 
-      // Advance the cut point past any leading toolResult messages so we never
-      // split a tool-use/tool-result pair across the compaction boundary.
-      let cutIndex = currentMessages.length - 20;
-      while (cutIndex < currentMessages.length && currentMessages[cutIndex].role === "toolResult") {
-        cutIndex++;
-      }
+        // If every message in the tail window is a toolResult, cutIndex has advanced
+        // past the end of the array. keepCount would be 0, causing OFFSET -1 in the
+        // SQL query, which is a PostgreSQL error. Skip compaction for this turn.
+        if (cutIndex >= currentMessages.length) {
+          console.warn("[stavrobot] Compaction skipped: all tail messages are toolResult, no safe cut point found.");
+          return;
+        }
 
-      // If every message in the tail window is a toolResult, cutIndex has advanced
-      // past the end of the array. keepCount would be 0, causing OFFSET -1 in the
-      // SQL query, which is a PostgreSQL error. Skip compaction for this turn.
-      if (cutIndex >= currentMessages.length) {
-        console.warn("[stavrobot] Compaction skipped: all tail messages are toolResult, no safe cut point found.");
-      } else {
         const messagesToCompact = currentMessages.slice(0, cutIndex);
         const messagesToKeep = currentMessages.slice(cutIndex);
 
@@ -795,35 +823,15 @@ export async function handlePrompt(
         const upToMessageId = cutoffResult.rows[0].id as number;
 
         await saveCompaction(pool, summaryText, upToMessageId);
-
-        const syntheticMessage: AgentMessage = {
-          role: "user",
-          content: [{ type: "text", text: `[Summary of earlier conversation]\n${summaryText}` }],
-          timestamp: Date.now(),
-        };
-
-        const newMessages = [syntheticMessage, ...messagesToKeep];
-        agent.replaceMessages(newMessages);
-        console.log(`[stavrobot] Compacted ${messagesToCompact.length} messages into summary, kept ${messagesToKeep.length} recent messages.`);
+        console.log(`[stavrobot] Background compaction complete: compacted ${messagesToCompact.length} messages, kept ${messagesToKeep.length}.`);
+        compactionCompleted = true;
+      } catch (error) {
+        console.error("[stavrobot] Background compaction failed:", error instanceof Error ? error.message : String(error));
+      } finally {
+        compactionInProgress = false;
       }
-    } finally {
-      compactionInProgress = false;
-    }
+    })();
   }
-
-  const lastAssistantMessage = agent.state.messages
-    .slice()
-    .reverse()
-    .find((message) => message.role === "assistant");
-
-  if (!lastAssistantMessage) {
-    return "";
-  }
-
-  const responseText = lastAssistantMessage.content
-    .filter((block): block is TextContent => block.type === "text")
-    .map((block) => block.text)
-    .join("");
 
   return responseText;
 }
