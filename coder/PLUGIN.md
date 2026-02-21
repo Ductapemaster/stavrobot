@@ -10,16 +10,20 @@ A plugin is a directory (or git repository) containing one or more tools. Each t
 
 ## Directory structure
 
+A plugin is typically a git repository. The bundle manifest lives at the repository root, and each tool is a subdirectory containing its own manifest and entrypoint.
+
 ```
-my-plugin/
-  manifest.json          # Bundle manifest (required)
-  my_tool/
-    manifest.json        # Tool manifest (required)
-    run.py               # Entrypoint (any executable filename)
-  another_tool/
-    manifest.json
-    run.sh
+my-plugin/                 # Repository root (e.g., github.com/user/my-plugin)
+├── manifest.json          # Bundle manifest (required, at repo root)
+├── my_tool/
+│   ├── manifest.json      # Tool manifest (required)
+│   └── run.py             # Entrypoint (any executable filename)
+└── another_tool/
+    ├── manifest.json
+    └── run.sh
 ```
+
+When installed, the repository is cloned into `data/tools/my-plugin/`.
 
 ## Bundle manifest
 
