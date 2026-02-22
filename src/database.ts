@@ -377,6 +377,31 @@ export async function deletePage(pool: pg.Pool, path: string): Promise<boolean> 
   return (result.rowCount ?? 0) > 0;
 }
 
+export async function initializeScratchpadSchema(pool: pg.Pool): Promise<void> {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS scratchpad (
+      id SERIAL PRIMARY KEY,
+      title TEXT NOT NULL,
+      body TEXT NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+}
+
+export interface ScratchpadTitle {
+  id: number;
+  title: string;
+}
+
+export async function loadAllScratchpadTitles(pool: pg.Pool): Promise<ScratchpadTitle[]> {
+  const result = await pool.query("SELECT id, title FROM scratchpad ORDER BY created_at");
+  return result.rows.map((row) => ({
+    id: row.id as number,
+    title: row.title as string,
+  }));
+}
+
 export async function executeSql(pool: pg.Pool, sql: string): Promise<string> {
   const result = await pool.query(sql);
   

@@ -2,7 +2,7 @@ import http from "http";
 import { fileURLToPath } from "url";
 import type { Pool } from "pg";
 import { loadConfig } from "./config.js";
-import { connectDatabase, initializeSchema, initializeMemoriesSchema, initializeCompactionsSchema, initializeCronSchema, initializePagesSchema, getPageByPath, getPageQueryByPath } from "./database.js";
+import { connectDatabase, initializeSchema, initializeMemoriesSchema, initializeCompactionsSchema, initializeCronSchema, initializePagesSchema, initializeScratchpadSchema, getPageByPath, getPageQueryByPath } from "./database.js";
 import { createAgent } from "./agent.js";
 import { initializeQueue, enqueueMessage } from "./queue.js";
 import { initializeScheduler } from "./scheduler.js";
@@ -371,6 +371,7 @@ async function main(): Promise<void> {
   await initializeCompactionsSchema(pool);
   await initializeCronSchema(pool);
   await initializePagesSchema(pool);
+  await initializeScratchpadSchema(pool);
   const agent = await createAgent(config, pool);
   initializeQueue(agent, pool, config);
   await initializeScheduler(pool);

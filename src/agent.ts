@@ -7,7 +7,7 @@ import type { Config, TelegramConfig, TtsConfig } from "./config.js";
 import type { FileAttachment } from "./uploads.js";
 import { transcribeAudio } from "./stt.js";
 import { getApiKey } from "./auth.js";
-import { executeSql, loadMessages, saveMessage, saveCompaction, loadLatestCompaction, loadAllMemories, upsertMemory, deleteMemory, createCronEntry, updateCronEntry, deleteCronEntry, listCronEntries, type Memory } from "./database.js";
+import { executeSql, loadMessages, saveMessage, saveCompaction, loadLatestCompaction, loadAllMemories, upsertMemory, deleteMemory, createCronEntry, updateCronEntry, deleteCronEntry, listCronEntries, loadAllScratchpadTitles, type Memory } from "./database.js";
 import { reloadScheduler } from "./scheduler.js";
 import { createWebSearchTool } from "./web-search.js";
 import { createWebFetchTool } from "./web-fetch.js";
@@ -680,6 +680,7 @@ export async function handlePrompt(
   }
 
   const memories = await loadAllMemories(pool);
+  const scratchpadTitles = await loadAllScratchpadTitles(pool);
 
   const effectiveBasePrompt = (config.customPrompt !== undefined
     ? `${config.baseSystemPrompt}\n\n${config.customPrompt}`
@@ -691,9 +692,9 @@ export async function handlePrompt(
     ? `${effectiveBasePrompt}\n\n${pluginListSection}`
     : effectiveBasePrompt;
 
-  if (memories.length === 0) {
-    agent.setSystemPrompt(promptWithPlugins);
-  } else {
+  let systemPrompt = promptWithPlugins;
+
+  if (memories.length > 0) {
     const memoryLines: string[] = [
       "These are your memories, they are things you stored yourself. Use the `update_memory` tool to update a memory, and the `delete_memory` tool to delete a memory. You should add anything that seems important to the user, anything that might have bearing on the future, or anything that will be important to recall later. However, do keep them to a few paragraphs, to avoid filling up the context.",
       "",
@@ -712,9 +713,19 @@ export async function handlePrompt(
       memoryLines.push("");
     }
 
-    const injectionText = memoryLines.join("\n");
-    agent.setSystemPrompt(`${promptWithPlugins}\n\n${injectionText}`);
+    systemPrompt = `${systemPrompt}\n\n${memoryLines.join("\n")}`;
   }
+
+  if (scratchpadTitles.length > 0) {
+    const scratchpadLines = ["Your scratchpad (read or manage via execute_sql on the \"scratchpad\" table):", ""];
+    for (const entry of scratchpadTitles) {
+      scratchpadLines.push(`[Scratchpad ${entry.id}] ${entry.title}`);
+    }
+    console.log(`[stavrobot] Injecting ${scratchpadTitles.length} scratchpad title(s) into system prompt`);
+    systemPrompt = `${systemPrompt}\n\n${scratchpadLines.join("\n")}`;
+  }
+
+  agent.setSystemPrompt(systemPrompt);
 
   const savePromises: Promise<void>[] = [];
 
