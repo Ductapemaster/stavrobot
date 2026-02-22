@@ -7,7 +7,7 @@ import type { Config, TelegramConfig, TtsConfig } from "./config.js";
 import type { FileAttachment } from "./uploads.js";
 import { transcribeAudio } from "./stt.js";
 import { getApiKey } from "./auth.js";
-import { executeSql, loadMessages, saveMessage, saveCompaction, loadLatestCompaction, loadAllMemories, upsertMemory, deleteMemory, createCronEntry, updateCronEntry, deleteCronEntry, listCronEntries, loadAllScratchpadTitles, type Memory } from "./database.js";
+import { executeSql, loadMessages, saveMessage, saveCompaction, loadLatestCompaction, loadAllMemories, upsertMemory, deleteMemory, upsertScratchpad, deleteScratchpad, createCronEntry, updateCronEntry, deleteCronEntry, listCronEntries, loadAllScratchpadTitles, type Memory } from "./database.js";
 import { reloadScheduler } from "./scheduler.js";
 import { createWebSearchTool } from "./web-search.js";
 import { createWebFetchTool } from "./web-fetch.js";
@@ -61,50 +61,167 @@ export function createExecuteSqlTool(pool: pg.Pool): AgentTool {
   };
 }
 
-export function createUpdateMemoryTool(pool: pg.Pool): AgentTool {
+export function createManageKnowledgeTool(pool: pg.Pool): AgentTool {
   return {
-    name: "update_memory",
-    label: "Update memory",
-    description: "Create or update a persistent memory. To create a new memory, omit the id. To update an existing memory, provide its id. Memories persist across sessions and are shown to you at the start of every conversation.",
-    parameters: Type.Object({
-      id: Type.Optional(Type.Number({ description: "The id of the memory to update. Omit to create a new memory." })),
-      content: Type.String({ description: "The content of the memory." }),
-    }),
-    execute: async (
-      toolCallId: string,
-      params: unknown
-    ): Promise<AgentToolResult<{ message: string }>> => {
-      const { id, content } = params as { id?: number; content: string };
-      const memoryId = await upsertMemory(pool, id, content);
-      const message = id === undefined ? `Memory ${memoryId} created.` : `Memory ${memoryId} updated.`;
-      console.log(`[stavrobot] ${message} Content: ${content}`);
-      return {
-        content: [{ type: "text" as const, text: message }],
-        details: { message },
-      };
-    },
-  };
-}
+    name: "manage_knowledge",
+    label: "Manage knowledge",
+    description: `Upsert or delete entries in the two-tier knowledge store.
 
-export function createDeleteMemoryTool(pool: pg.Pool): AgentTool {
-  return {
-    name: "delete_memory",
-    label: "Delete memory",
-    description: "Delete a persistent memory by its id.",
+**Memory** (store: "memory"): full content is injected into the system prompt every turn. Use for frequently needed facts, user preferences, and anything that should always be in context. Keep entries concise — they consume context on every request.
+
+**Scratchpad** (store: "scratchpad"): only titles are injected each turn; bodies are read on demand via execute_sql. Use for less frequent, longer-form knowledge such as reference material, detailed notes, or anything that doesn't need to be in context every turn.
+
+Actions:
+- upsert: create (omit id) or update (provide id) an entry
+- delete: remove an entry by id`,
     parameters: Type.Object({
-      id: Type.Number({ description: "The id of the memory to delete." }),
+      action: Type.Union([
+        Type.Literal("upsert"),
+        Type.Literal("delete"),
+      ], { description: "Action to perform: upsert or delete." }),
+      store: Type.Union([
+        Type.Literal("memory"),
+        Type.Literal("scratchpad"),
+      ], { description: "Which store to operate on: memory or scratchpad." }),
+      id: Type.Optional(Type.Number({ description: "Entry id. Omit to create a new entry (upsert); required for delete." })),
+      content: Type.Optional(Type.String({ description: "Memory content. Required when upserting a memory entry." })),
+      title: Type.Optional(Type.String({ description: "Scratchpad title. Required when upserting a scratchpad entry." })),
+      body: Type.Optional(Type.String({ description: "Scratchpad body. Required when upserting a scratchpad entry." })),
     }),
     execute: async (
       toolCallId: string,
       params: unknown
     ): Promise<AgentToolResult<{ message: string }>> => {
-      const { id } = params as { id: number };
-      await deleteMemory(pool, id);
-      const message = `Memory ${id} deleted.`;
-      console.log(`[stavrobot] ${message}`);
+      const raw = params as {
+        action: string;
+        store: string;
+        id?: number;
+        content?: string;
+        title?: string;
+        body?: string;
+      };
+
+      const { action, store } = raw;
+
+      console.log(`[stavrobot] manage_knowledge called: action=${action} store=${store} id=${raw.id}`);
+
+      if (action === "upsert") {
+        if (store === "memory") {
+          if (raw.content === undefined || raw.content.trim() === "") {
+            const errorMessage = "Error: content is required when upserting a memory entry.";
+            return {
+              content: [{ type: "text" as const, text: errorMessage }],
+              details: { message: errorMessage },
+            };
+          }
+          const memoryResult = await upsertMemory(pool, raw.id, raw.content);
+          if (raw.id !== undefined && memoryResult.rowCount === 0) {
+            const errorMessage = `Error: memory ${raw.id} not found.`;
+            return {
+              content: [{ type: "text" as const, text: errorMessage }],
+              details: { message: errorMessage },
+            };
+          }
+          const message = raw.id === undefined ? `Memory ${memoryResult.id} created.` : `Memory ${memoryResult.id} updated.`;
+          console.log(`[stavrobot] ${message}`);
+          return {
+            content: [{ type: "text" as const, text: message }],
+            details: { message },
+          };
+        }
+
+        if (store === "scratchpad") {
+          if (raw.title === undefined || raw.title.trim() === "") {
+            const errorMessage = "Error: title is required when upserting a scratchpad entry.";
+            return {
+              content: [{ type: "text" as const, text: errorMessage }],
+              details: { message: errorMessage },
+            };
+          }
+          if (raw.body === undefined || raw.body.trim() === "") {
+            const errorMessage = "Error: body is required when upserting a scratchpad entry.";
+            return {
+              content: [{ type: "text" as const, text: errorMessage }],
+              details: { message: errorMessage },
+            };
+          }
+          const scratchpadResult = await upsertScratchpad(pool, raw.id, raw.title, raw.body);
+          if (raw.id !== undefined && scratchpadResult.rowCount === 0) {
+            const errorMessage = `Error: scratchpad entry ${raw.id} not found.`;
+            return {
+              content: [{ type: "text" as const, text: errorMessage }],
+              details: { message: errorMessage },
+            };
+          }
+          const message = raw.id === undefined ? `Scratchpad entry ${scratchpadResult.id} created.` : `Scratchpad entry ${scratchpadResult.id} updated.`;
+          console.log(`[stavrobot] ${message}`);
+          return {
+            content: [{ type: "text" as const, text: message }],
+            details: { message },
+          };
+        }
+
+        const errorMessage = `Error: unknown store '${store}'. Valid stores: memory, scratchpad.`;
+        return {
+          content: [{ type: "text" as const, text: errorMessage }],
+          details: { message: errorMessage },
+        };
+      }
+
+      if (action === "delete") {
+        if (raw.id === undefined) {
+          const errorMessage = "Error: id is required for delete.";
+          return {
+            content: [{ type: "text" as const, text: errorMessage }],
+            details: { message: errorMessage },
+          };
+        }
+
+        if (store === "memory") {
+          const rowCount = await deleteMemory(pool, raw.id);
+          if (rowCount === 0) {
+            const errorMessage = `Error: memory ${raw.id} not found.`;
+            return {
+              content: [{ type: "text" as const, text: errorMessage }],
+              details: { message: errorMessage },
+            };
+          }
+          const message = `Memory ${raw.id} deleted.`;
+          console.log(`[stavrobot] ${message}`);
+          return {
+            content: [{ type: "text" as const, text: message }],
+            details: { message },
+          };
+        }
+
+        if (store === "scratchpad") {
+          const rowCount = await deleteScratchpad(pool, raw.id);
+          if (rowCount === 0) {
+            const errorMessage = `Error: scratchpad entry ${raw.id} not found.`;
+            return {
+              content: [{ type: "text" as const, text: errorMessage }],
+              details: { message: errorMessage },
+            };
+          }
+          const message = `Scratchpad entry ${raw.id} deleted.`;
+          console.log(`[stavrobot] ${message}`);
+          return {
+            content: [{ type: "text" as const, text: message }],
+            details: { message },
+          };
+        }
+
+        const errorMessage = `Error: unknown store '${store}'. Valid stores: memory, scratchpad.`;
+        return {
+          content: [{ type: "text" as const, text: errorMessage }],
+          details: { message: errorMessage },
+        };
+      }
+
+      const errorMessage = `Error: unknown action '${action}'. Valid actions: upsert, delete.`;
       return {
-        content: [{ type: "text" as const, text: message }],
-        details: { message },
+        content: [{ type: "text" as const, text: errorMessage }],
+        details: { message: errorMessage },
       };
     },
   };
@@ -526,7 +643,7 @@ export function createManageCronTool(pool: pg.Pool): AgentTool {
 export async function createAgent(config: Config, pool: pg.Pool): Promise<Agent> {
   const model = getModel(config.provider as any, config.model as any);
   const messages = await loadMessages(pool);
-  const tools = [createExecuteSqlTool(pool), createUpdateMemoryTool(pool), createDeleteMemoryTool(pool), createSendSignalMessageTool(), createManageCronTool(pool), createRunPythonTool(), createUpsertPageTool(pool), createDeletePageTool(pool), createReadUploadTool(), createDeleteUploadTool()];
+  const tools = [createExecuteSqlTool(pool), createManageKnowledgeTool(pool), createSendSignalMessageTool(), createManageCronTool(pool), createRunPythonTool(), createUpsertPageTool(pool), createDeletePageTool(pool), createReadUploadTool(), createDeleteUploadTool()];
   if (config.webSearch !== undefined) {
     tools.push(createWebSearchTool(config.webSearch));
   }
@@ -696,7 +813,7 @@ export async function handlePrompt(
 
   if (memories.length > 0) {
     const memoryLines: string[] = [
-      "These are your memories, they are things you stored yourself. Use the `update_memory` tool to update a memory, and the `delete_memory` tool to delete a memory. You should add anything that seems important to the user, anything that might have bearing on the future, or anything that will be important to recall later. However, do keep them to a few paragraphs, to avoid filling up the context.",
+      "These are your memories, they are things you stored yourself. Use the `manage_knowledge` tool (store: \"memory\") to upsert or delete memories. You should add anything that seems important to the user, anything that might have bearing on the future, or anything that will be important to recall later. Keep memories concise — they are injected in full every turn, so avoid storing large amounts of text here. Use the scratchpad for less frequent or longer-form knowledge.",
       "",
       "Here are your memories:",
       "",
@@ -717,7 +834,7 @@ export async function handlePrompt(
   }
 
   if (scratchpadTitles.length > 0) {
-    const scratchpadLines = ["Your scratchpad (read or manage via execute_sql on the \"scratchpad\" table):", ""];
+    const scratchpadLines = ["Your scratchpad (use manage_knowledge with store: \"scratchpad\" to upsert or delete entries; read bodies via execute_sql on the \"scratchpad\" table):", ""];
     for (const entry of scratchpadTitles) {
       scratchpadLines.push(`[Scratchpad ${entry.id}] ${entry.title}`);
     }

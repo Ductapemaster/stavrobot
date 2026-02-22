@@ -68,24 +68,25 @@ export async function loadAllMemories(pool: pg.Pool): Promise<Memory[]> {
   }));
 }
 
-export async function upsertMemory(pool: pg.Pool, id: number | undefined, content: string): Promise<number> {
+export async function upsertMemory(pool: pg.Pool, id: number | undefined, content: string): Promise<{ id: number; rowCount: number }> {
   if (id === undefined) {
     const result = await pool.query(
       "INSERT INTO memories (content) VALUES ($1) RETURNING id",
       [content]
     );
-    return result.rows[0].id as number;
+    return { id: result.rows[0].id as number, rowCount: 1 };
   } else {
-    await pool.query(
+    const result = await pool.query(
       "UPDATE memories SET content = $1, updated_at = NOW() WHERE id = $2",
       [content, id]
     );
-    return id;
+    return { id, rowCount: result.rowCount ?? 0 };
   }
 }
 
-export async function deleteMemory(pool: pg.Pool, id: number): Promise<void> {
-  await pool.query("DELETE FROM memories WHERE id = $1", [id]);
+export async function deleteMemory(pool: pg.Pool, id: number): Promise<number> {
+  const result = await pool.query("DELETE FROM memories WHERE id = $1", [id]);
+  return result.rowCount ?? 0;
 }
 
 export interface Compaction {
@@ -400,6 +401,27 @@ export async function loadAllScratchpadTitles(pool: pg.Pool): Promise<Scratchpad
     id: row.id as number,
     title: row.title as string,
   }));
+}
+
+export async function upsertScratchpad(pool: pg.Pool, id: number | undefined, title: string, body: string): Promise<{ id: number; rowCount: number }> {
+  if (id === undefined) {
+    const result = await pool.query(
+      "INSERT INTO scratchpad (title, body) VALUES ($1, $2) RETURNING id",
+      [title, body],
+    );
+    return { id: result.rows[0].id as number, rowCount: 1 };
+  } else {
+    const result = await pool.query(
+      "UPDATE scratchpad SET title = $1, body = $2, updated_at = NOW() WHERE id = $3",
+      [title, body, id],
+    );
+    return { id, rowCount: result.rowCount ?? 0 };
+  }
+}
+
+export async function deleteScratchpad(pool: pg.Pool, id: number): Promise<number> {
+  const result = await pool.query("DELETE FROM scratchpad WHERE id = $1", [id]);
+  return result.rowCount ?? 0;
 }
 
 export async function executeSql(pool: pg.Pool, sql: string): Promise<string> {
