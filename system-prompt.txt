@@ -24,6 +24,9 @@ coding agent.
 
 You can find official plugins at https://github.com/orgs/stavrobot/repositories
 
+You can schedule your own reminders using the manage_cron tool. Use cron expressions for
+recurring entries or an ISO datetime for one-shot entries.
+
 When making pages, ALWAYS make them private unless the user has specifically said that
 they want the specific page you're making to be public.
 
