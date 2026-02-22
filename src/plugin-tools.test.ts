@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { createRunPluginToolTool, createInstallPluginTool, createUpdatePluginTool } from "./plugin-tools.js";
+import { createRunPluginToolTool, createInstallPluginTool, createUpdatePluginTool, createCreatePluginTool, createRequestCodingTaskTool } from "./plugin-tools.js";
 
 function mockFetch(status: number, body: string): void {
   vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
@@ -122,5 +122,79 @@ describe("createUpdatePluginTool", () => {
     const result = await tool.execute("call-2", { name: "myplugin" });
     const text = (result.content[0] as { type: string; text: string }).text;
     expect(text).toBe("Plugin 'myplugin' updated successfully.\n\nInit script output:\n```\nRe-installed dependencies.\n\n```");
+  });
+});
+
+describe("createCreatePluginTool", () => {
+  const tool = createCreatePluginTool();
+
+  it("calls POST /create with the correct body and returns the response text", async () => {
+    const responseBody = JSON.stringify({ name: "myplugin", message: "Plugin 'myplugin' created." });
+    mockFetch(200, responseBody);
+    const result = await tool.execute("call-1", { name: "myplugin", description: "A test plugin." });
+    const text = (result.content[0] as { type: string; text: string }).text;
+    expect(text).toBe(responseBody);
+    const fetchMock = vi.mocked(globalThis.fetch);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://plugin-runner:3003/create",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ name: "myplugin", description: "A test plugin." }),
+      }),
+    );
+  });
+});
+
+describe("createRequestCodingTaskTool", () => {
+  const tool = createRequestCodingTaskTool();
+
+  it("returns an error when the plugin is not found (404)", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValueOnce({
+      status: 404,
+      text: () => Promise.resolve("Not found"),
+    }));
+    const result = await tool.execute("call-1", { plugin: "missing", message: "Add a tool." });
+    const text = (result.content[0] as { type: string; text: string }).text;
+    expect(text).toBe("Plugin 'missing' not found. Create it first with create_plugin.");
+  });
+
+  it("returns an error when the plugin is not editable", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValueOnce({
+      status: 200,
+      text: () => Promise.resolve(JSON.stringify({ name: "gitplugin", editable: false })),
+    }));
+    const result = await tool.execute("call-2", { plugin: "gitplugin", message: "Add a tool." });
+    const text = (result.content[0] as { type: string; text: string }).text;
+    expect(text).toBe("Plugin 'gitplugin' is not editable. Only locally created plugins can be modified by the coding agent.");
+  });
+
+  it("submits the task to the coder when the plugin is editable", async () => {
+    vi.stubGlobal("fetch", vi.fn()
+      .mockResolvedValueOnce({
+        status: 200,
+        text: () => Promise.resolve(JSON.stringify({ name: "myplugin", editable: true })),
+      })
+      .mockResolvedValueOnce({
+        status: 202,
+        text: () => Promise.resolve(""),
+      }),
+    );
+    const result = await tool.execute("call-3", { plugin: "myplugin", message: "Add a hello tool." });
+    const text = (result.content[0] as { type: string; text: string }).text;
+    expect(text).toMatch(/^Coding task .+ submitted for plugin 'myplugin'\. The coder agent will respond when done\.$/);
+    const fetchMock = vi.mocked(globalThis.fetch);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      "http://plugin-runner:3003/bundles/myplugin",
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "http://coder:3002/code",
+      expect.objectContaining({
+        method: "POST",
+        body: expect.stringContaining('"plugin":"myplugin"'),
+      }),
+    );
   });
 });

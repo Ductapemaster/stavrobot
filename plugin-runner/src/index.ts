@@ -342,6 +342,12 @@ async function runScript(
   stdin: string,
   timeoutMs: number,
 ): Promise<ScriptResult> {
+  const pluginName = path.relative(PLUGINS_DIR, cwd).split(path.sep)[0];
+  const uvCacheDir = `/cache/${pluginName}/uv`;
+  fs.mkdirSync(uvCacheDir, { recursive: true });
+  fs.chownSync(`/cache/${pluginName}`, uid, gid);
+  fs.chownSync(uvCacheDir, uid, gid);
+
   return new Promise<ScriptResult>((resolve) => {
     const child = spawn(entrypoint, [], {
       cwd,
@@ -349,7 +355,7 @@ async function runScript(
       gid,
       env: {
         PATH: process.env.PATH,
-        UV_CACHE_DIR: "/tmp/uv-cache",
+        UV_CACHE_DIR: uvCacheDir,
         UV_PYTHON_INSTALL_DIR: "/opt/uv/python",
       },
     });
@@ -434,12 +440,17 @@ function findTool(bundle: LoadedBundle, toolName: string): LoadedTool | null {
   return bundle.tools.find((tool) => tool.manifest.name === toolName) ?? null;
 }
 
+function isEditable(pluginName: string): boolean {
+  return !fs.existsSync(path.join(PLUGINS_DIR, pluginName, ".git"));
+}
+
 function handleListBundles(response: http.ServerResponse): void {
   loadBundles();
 
   const result = bundles.map((bundle) => ({
     name: bundle.manifest.name,
     description: bundle.manifest.description,
+    editable: isEditable(bundle.manifest.name),
   }));
 
   response.writeHead(200, { "Content-Type": "application/json" });
@@ -466,6 +477,7 @@ function handleGetBundle(bundleName: string, response: http.ServerResponse): voi
   const responseBody: Record<string, unknown> = {
     name: bundle.manifest.name,
     description: bundle.manifest.description,
+    editable: isEditable(bundle.manifest.name),
     tools,
   };
 
@@ -585,6 +597,66 @@ async function handleRunTool(
   console.log(`[stavrobot-plugin-runner] Tool ${bundleName}/${toolName} completed successfully`);
   response.writeHead(200, { "Content-Type": "application/json" });
   response.end(JSON.stringify({ success: true, output }));
+}
+
+async function handleCreate(
+  request: http.IncomingMessage,
+  response: http.ServerResponse
+): Promise<void> {
+  const body = await readRequestBody(request);
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(body);
+  } catch {
+    response.writeHead(400, { "Content-Type": "application/json" });
+    response.end(JSON.stringify({ error: "Invalid JSON body" }));
+    return;
+  }
+
+  if (
+    typeof parsed !== "object" ||
+    parsed === null ||
+    typeof (parsed as Record<string, unknown>)["name"] !== "string" ||
+    typeof (parsed as Record<string, unknown>)["description"] !== "string"
+  ) {
+    response.writeHead(400, { "Content-Type": "application/json" });
+    response.end(JSON.stringify({ error: "Body must have a 'name' string field and a 'description' string field" }));
+    return;
+  }
+
+  const pluginName = (parsed as Record<string, unknown>)["name"] as string;
+  const description = (parsed as Record<string, unknown>)["description"] as string;
+
+  if (!/^[a-z0-9-]+$/.test(pluginName)) {
+    response.writeHead(400, { "Content-Type": "application/json" });
+    response.end(
+      JSON.stringify({
+        error: `Invalid plugin name "${pluginName}": only lowercase letters, digits, and hyphens are allowed`,
+      })
+    );
+    return;
+  }
+
+  const destDir = path.join(PLUGINS_DIR, pluginName);
+
+  if (fs.existsSync(destDir)) {
+    response.writeHead(409, { "Content-Type": "application/json" });
+    response.end(JSON.stringify({ error: `Plugin "${pluginName}" already exists` }));
+    return;
+  }
+
+  fs.mkdirSync(destDir, { recursive: true });
+
+  const manifest = { name: pluginName, description };
+  fs.writeFileSync(path.join(destDir, "manifest.json"), JSON.stringify(manifest, null, 2));
+
+  const { uid, gid } = ensurePluginUser(pluginName);
+  execFileSync("chown", ["-R", `${uid}:${gid}`, destDir], { stdio: "pipe" });
+  fs.chmodSync(destDir, 0o700);
+
+  console.log(`[stavrobot-plugin-runner] Created local plugin "${pluginName}"`);
+  response.writeHead(201, { "Content-Type": "application/json" });
+  response.end(JSON.stringify({ message: `Plugin '${pluginName}' created successfully.` }));
 }
 
 async function handleInstall(
@@ -1095,6 +1167,11 @@ async function handleRequest(
     const runToolMatch = url.match(/^\/bundles\/([^/]+)\/tools\/([^/]+)\/run$/);
     if (method === "POST" && runToolMatch !== null) {
       await handleRunTool(runToolMatch[1], runToolMatch[2], request, response);
+      return;
+    }
+
+    if (method === "POST" && url === "/create") {
+      await handleCreate(request, response);
       return;
     }
 

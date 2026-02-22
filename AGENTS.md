@@ -166,7 +166,7 @@ The Python code (`client.py`) is a standalone CLI client with no third-party dep
 - The LLM agent must never be able to read files from the app container's filesystem. All code execution happens in separate containers with no shared filesystem mounts between the app and runner containers.
 - No tool may give the LLM the ability to read arbitrary files from the app container. If a new tool needs filesystem access, it must run in a dedicated separate container.
 - The app container must not have code execution runtimes (Python, uv, etc.) installed. These belong in their dedicated runner containers.
-- Plugin and bundle configuration files (`config.json`) may contain secrets (API keys, tokens, etc.). No API endpoint or tool may ever return config values to the LLM agent. The agent can write config via `configure_plugin`, but must never be able to read it back. When reporting config status (e.g., after an update), only report which keys are present or missing, never their values.
+- Plugin configuration files (`config.json`) may contain secrets (API keys, tokens, etc.). No API endpoint or tool may ever return config values to the LLM agent. The agent can write config via `configure_plugin`, but must never be able to read it back. When reporting config status (e.g., after an update), only report which keys are present or missing, never their values.
 
 ## Version control
 
@@ -178,32 +178,29 @@ The Python code (`client.py`) is a standalone CLI client with no third-party dep
 
 ## Coder subsystem
 
-The `tool-runner/` and `plugin-runner/` directories share nearly identical code for
-bundle/plugin discovery, loading, and execution. When making changes to one, apply the
-same changes to the other.
-
-The tool-runner and plugin-runner containers must have identical runtime environments
-(same apt packages, same runtimes, same uv/Python setup). The only difference is the
-isolation model: plugin-runner creates a dedicated system user per plugin and restricts
-each plugin's directory to its own user (`chmod 700`), so plugins cannot read each
-other's files or config. Tool-runner does not do this because tools are created by the
-trusted coder agent, not installed from arbitrary external repos.
-
 The self-programming feature is split across two containers:
 
-- **Tool runner (`tool-runner/`):** Node.js HTTP server with no LLM. Serves tool metadata and
-  executes custom tools as the `toolrunner` user. Endpoints:
-  - `GET /tools` — list all tools
-  - `GET /tools/:name` — get tool manifest
-  - `POST /tools/:name/run` — execute a tool
+- **Plugin runner (`plugin-runner/`):** Node.js HTTP server with no LLM. Handles both
+  locally created (editable) plugins and git-installed plugins. Creates a dedicated
+  system user per plugin and restricts each plugin's directory to its own user
+  (`chmod 700`), so plugins cannot read each other's files or config. Endpoints:
+  - `GET /bundles` — list all plugins
+  - `GET /bundles/:name` — get plugin manifest
+  - `POST /bundles/:name/tools/:tool/run` — execute a plugin tool
+  - `POST /install` — install a plugin from a git URL
+  - `POST /update` — update an installed plugin
+  - `POST /remove` — remove a plugin
+  - `POST /configure` — set plugin configuration
+  - `POST /create` — create a new empty editable plugin
 - **Claude Code container (`coder/`):** Python HTTP server that wraps the `claude`
-  headless binary. Receives coding tasks and runs them asynchronously, posting results
-  back to the main app via `POST /chat`. Endpoint:
-  - `POST /code` — submit a coding task (returns 202 immediately)
+  headless binary. Receives coding tasks for a specific plugin, runs as that plugin's
+  user, and works in `/plugins/<plugin>/`. Posts results back to the main app via
+  `POST /chat`. Endpoint:
+  - `POST /code` — submit a coding task with `{ taskId, plugin, message }` (returns 202 immediately)
 
-The async workflow: main app sends `POST /code` to `coder` → `coder` spawns
-`claude -p` as a subprocess → on completion, posts result to `app:3000/chat` with
-`source: "coder"`.
+The async workflow: main app sends `POST /code` with `{ taskId, plugin, message }` to
+`coder` → `coder` spawns `claude -p` as a subprocess in `/plugins/<plugin>/` as the
+plugin's user → on completion, posts result to `app:3000/chat` with `source: "coder"`.
 
 Configuration: the `coder` entrypoint (running as root) reads `config.toml`,
 extracts `password` and `[coder].model` into `/run/coder-env` (owned by the `coder`

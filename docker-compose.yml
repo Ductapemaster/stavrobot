@@ -47,14 +47,6 @@ services:
       TZ: ${TZ:-UTC}
     restart: unless-stopped
 
-  tool-runner:
-    build: ./tool-runner
-    environment:
-      TZ: ${TZ:-UTC}
-    restart: unless-stopped
-    volumes:
-      - ./data/tools:/tools
-
   plugin-runner:
     build: ./plugin-runner
     environment:
@@ -62,6 +54,7 @@ services:
     restart: unless-stopped
     volumes:
       - ./data/plugins:/plugins
+      - ./cache/plugins:/cache
 
   coder:
     build: ./coder
@@ -71,7 +64,8 @@ services:
     volumes:
       - ./data/main:/config
       - ./data/coder:/home/coder/.claude
-      - ./data/tools:/tools
+      - ./data/plugins:/plugins
+      - ./cache/plugins:/cache
     depends_on:
       app:
         condition: service_started

@@ -17,17 +17,16 @@ services:
       - {{ HM_DATA_DIR }}/main/config.toml:/app/config.toml
       - {{ HM_DATA_DIR }}/app:/app/data
   python-runner: {}
-  tool-runner:
-    volumes:
-      - {{ HM_DATA_DIR }}/tools:/tools
   plugin-runner:
     volumes:
       - {{ HM_DATA_DIR }}/plugins:/plugins
+      - {{ HM_CACHE_DIR }}/plugins:/cache
   coder:
     volumes:
       - {{ HM_DATA_DIR }}/main:/config
       - {{ HM_DATA_DIR }}/coder:/home/coder/.claude
-      - {{ HM_DATA_DIR }}/tools:/tools
+      - {{ HM_DATA_DIR }}/plugins:/plugins
+      - {{ HM_CACHE_DIR }}/plugins:/cache
   pg-backup:
     volumes:
       - ./scripts:/scripts:ro

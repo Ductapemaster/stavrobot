@@ -26,12 +26,13 @@ See [PLUGIN.md](coder/PLUGIN.md) for everything you need to know to create a Sta
 ## Recommended plugins
 
 - Google Calendar: Ask Stavrobot to install https://github.com/stavrobot/plugin-google-calendar.git
+- Google Flights: Ask Stavrobot to install https://github.com/stavrobot/plugin-flights.git
 - Weather: Ask Stavrobot to install https://github.com/stavrobot/plugin-weather.git
 - Hacker News front page: Ask Stavrobot to install https://github.com/stavrobot/plugin-hackernews.git
 
 ## Architecture
 
-Five Docker containers: `app` (TypeScript server, exposes `POST /chat` on port 3000 and handles Telegram webhooks at `POST /telegram/webhook`), `postgres` (PostgreSQL 17 for persistent state), `signal-bridge` (Python daemon bridging Signal via signal-cli to the app), `tool-runner` (Node.js tool runner — lists, inspects, and executes custom tools), and `coder` (Claude Code headless agent for creating custom tools).
+Four Docker containers: `app` (TypeScript server, exposes `POST /chat` on port 3000 and handles Telegram webhooks at `POST /telegram/webhook`), `postgres` (PostgreSQL 17 for persistent state), `plugin-runner` (Node.js server — lists, inspects, and executes plugins, both locally created and git-installed), and `coder` (Claude Code headless agent for creating and modifying editable plugins).
 
 ## Setup
 

@@ -2,6 +2,12 @@ import { Type } from "@mariozechner/pi-ai";
 import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
 
 const PLUGIN_RUNNER_BASE_URL = "http://plugin-runner:3003";
+const CLAUDE_CODE_BASE_URL = "http://coder:3002";
+
+interface BundleManifest {
+  editable?: boolean;
+  [key: string]: unknown;
+}
 
 interface PluginRunResult {
   success: boolean;
@@ -281,6 +287,102 @@ export function createRunPluginToolTool(): AgentTool {
       const responseText = await response.text();
       console.log("[stavrobot] run_plugin_tool result:", responseText.length, "characters");
       const result = formatRunPluginToolResult(plugin, tool, responseText, response.status);
+      return {
+        content: [{ type: "text" as const, text: result }],
+        details: { result },
+      };
+    },
+  };
+}
+
+export function createCreatePluginTool(): AgentTool {
+  return {
+    name: "create_plugin",
+    label: "Create plugin",
+    description: "Create a new empty plugin with the given name and description. The plugin will be locally editable and can be populated with tools by the coding agent via request_coding_task.",
+    parameters: Type.Object({
+      name: Type.String({ description: "The plugin name (used as the directory name and identifier)." }),
+      description: Type.String({ description: "A short description of what the plugin does." }),
+    }),
+    execute: async (
+      toolCallId: string,
+      params: unknown,
+    ): Promise<AgentToolResult<{ result: string }>> => {
+      const { name, description } = params as { name: string; description: string };
+      console.log("[stavrobot] create_plugin called: name:", name);
+      const response = await fetch(`${PLUGIN_RUNNER_BASE_URL}/create`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, description }),
+      });
+      const result = await response.text();
+      console.log("[stavrobot] create_plugin result:", result.length, "characters");
+      return {
+        content: [{ type: "text" as const, text: result }],
+        details: { result },
+      };
+    },
+  };
+}
+
+function isBundleManifest(value: unknown): value is BundleManifest {
+  return typeof value === "object" && value !== null;
+}
+
+export function createRequestCodingTaskTool(): AgentTool {
+  return {
+    name: "request_coding_task",
+    label: "Request coding task",
+    description: "Send a coding task to the coding agent to create or modify a specific plugin. The plugin must be editable (locally created, not installed from a git repository). This is asynchronous — the result will arrive later as a message from the coder agent. Describe what you want clearly and completely.",
+    parameters: Type.Object({
+      plugin: Type.String({ description: "The name of the plugin to create or modify. Must be an editable (locally created) plugin." }),
+      message: Type.String({ description: "A detailed description of what to create or modify in the plugin." }),
+    }),
+    execute: async (
+      toolCallId: string,
+      params: unknown,
+    ): Promise<AgentToolResult<{ result: string }>> => {
+      const { plugin, message } = params as { plugin: string; message: string };
+      console.log("[stavrobot] request_coding_task called: plugin:", plugin);
+
+      const bundleResponse = await fetch(`${PLUGIN_RUNNER_BASE_URL}/bundles/${plugin}`);
+      if (bundleResponse.status === 404) {
+        const result = `Plugin '${plugin}' not found. Create it first with create_plugin.`;
+        return {
+          content: [{ type: "text" as const, text: result }],
+          details: { result },
+        };
+      }
+
+      const bundleText = await bundleResponse.text();
+      let manifest: unknown;
+      try {
+        manifest = JSON.parse(bundleText) as unknown;
+      } catch {
+        const result = `Failed to parse plugin manifest for '${plugin}'.`;
+        return {
+          content: [{ type: "text" as const, text: result }],
+          details: { result },
+        };
+      }
+
+      if (!isBundleManifest(manifest) || manifest.editable !== true) {
+        const result = `Plugin '${plugin}' is not editable. Only locally created plugins can be modified by the coding agent.`;
+        return {
+          content: [{ type: "text" as const, text: result }],
+          details: { result },
+        };
+      }
+
+      const taskId = crypto.randomUUID();
+      console.log("[stavrobot] request_coding_task submitting: taskId", taskId, "plugin:", plugin, "message:", message);
+      await fetch(`${CLAUDE_CODE_BASE_URL}/code`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ taskId, plugin, message }),
+      });
+      const result = `Coding task ${taskId} submitted for plugin '${plugin}'. The coder agent will respond when done.`;
+      console.log("[stavrobot] request_coding_task submitted:", taskId);
       return {
         content: [{ type: "text" as const, text: result }],
         details: { result },

@@ -11,8 +11,7 @@ import { executeSql, loadMessages, saveMessage, saveCompaction, loadLatestCompac
 import { reloadScheduler } from "./scheduler.js";
 import { createWebSearchTool } from "./web-search.js";
 import { createWebFetchTool } from "./web-fetch.js";
-import { createListBundlesTool, createShowBundleTool, createRunBundleToolTool, createRequestCodingTaskTool } from "./coder-tools.js";
-import { createInstallPluginTool, createUpdatePluginTool, createRemovePluginTool, createConfigurePluginTool, createListPluginsTool, createShowPluginTool, createRunPluginToolTool } from "./plugin-tools.js";
+import { createInstallPluginTool, createUpdatePluginTool, createRemovePluginTool, createConfigurePluginTool, createListPluginsTool, createShowPluginTool, createRunPluginToolTool, createCreatePluginTool, createRequestCodingTaskTool } from "./plugin-tools.js";
 import { createRunPythonTool } from "./python.js";
 import { createUpsertPageTool, createDeletePageTool } from "./pages.js";
 import { createReadUploadTool, createDeleteUploadTool } from "./upload-tools.js";
@@ -537,14 +536,6 @@ export async function createAgent(config: Config, pool: pg.Pool): Promise<Agent>
   if (config.tts !== undefined) {
     tools.push(createTextToSpeechTool(config.tts));
   }
-  if (config.coder !== undefined) {
-    tools.push(
-      createListBundlesTool(),
-      createShowBundleTool(),
-      createRunBundleToolTool(),
-      createRequestCodingTaskTool(),
-    );
-  }
   tools.push(
     createInstallPluginTool(),
     createUpdatePluginTool(),
@@ -554,6 +545,12 @@ export async function createAgent(config: Config, pool: pg.Pool): Promise<Agent>
     createShowPluginTool(),
     createRunPluginToolTool(),
   );
+  if (config.coder !== undefined) {
+    tools.push(
+      createCreatePluginTool(),
+      createRequestCodingTaskTool(),
+    );
+  }
   if (config.telegram !== undefined) {
     tools.push(createSendTelegramMessageTool(config.telegram));
   }
