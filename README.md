@@ -16,6 +16,7 @@ A personal AI assistant with persistent memory, sandboxed code execution, and Si
 - **Cron scheduling.** The agent can schedule its own recurring or one-shot reminders.
 - **Web search and fetch.** Optional tools for searching the web and fetching/analyzing URLs via sub-agent LLM calls.
 - **Database explorer.** A web UI at `/explorer` for browsing PostgreSQL tables, viewing schemas, and paginating through rows.
+- **Plugin manager.** A web UI at `/plugins` for browsing installed plugins, installing new ones from git URLs, updating, deleting, and editing plugin configuration.
 - **Apps.** The agent can create dynamic web apps. Apps are private (auth-required) by default, with an option to make individual pages public.
 - **Conversation compaction.** Auto-summarizes long conversation histories to stay within context limits.
 

@@ -53,6 +53,7 @@ services:
       TZ: ${TZ:-UTC}
     restart: unless-stopped
     volumes:
+      - ./data/main:/config
       - ./data/plugins:/plugins
       - ./cache/plugins:/cache
 

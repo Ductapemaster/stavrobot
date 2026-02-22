@@ -140,12 +140,14 @@ const EXPLORER_PAGE_HTML = `<!DOCTYPE html>
       display: flex;
       height: 100vh;
       color: #1a1a1a;
-      background: #f5f5f5;
+      background: #f8f9fa;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
     }
     #sidebar {
       width: 240px;
       background: #fff;
-      border-right: 1px solid #ddd;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.08), 0 1px 2px rgba(0,0,0,0.06);
       overflow-y: auto;
       padding: 16px 0;
     }
@@ -163,8 +165,9 @@ const EXPLORER_PAGE_HTML = `<!DOCTYPE html>
       padding: 10px 16px;
       cursor: pointer;
       border-left: 3px solid transparent;
+      transition: all 0.15s ease;
     }
-    .table-item:hover { background: #f5f5f5; }
+    .table-item:hover { background: #f8f9fa; }
     .table-item.selected {
       background: #fff7ed;
       border-left-color: #d97706;
@@ -180,7 +183,7 @@ const EXPLORER_PAGE_HTML = `<!DOCTYPE html>
     #header {
       padding: 20px 24px;
       background: #fff;
-      border-bottom: 1px solid #ddd;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.08), 0 1px 2px rgba(0,0,0,0.06);
     }
     #header h1 {
       font-size: 20px;
@@ -237,10 +240,11 @@ const EXPLORER_PAGE_HTML = `<!DOCTYPE html>
       border-bottom: 2px solid #ddd;
       cursor: pointer;
       user-select: none;
+      transition: background 0.15s ease;
     }
     th:hover { background: #f0f0f0; }
     th .sort-indicator { margin-left: 4px; color: #999; }
-    tbody tr { cursor: pointer; }
+    tbody tr { cursor: pointer; transition: background 0.15s ease; }
     tbody tr:hover td { background: #fafafa; }
     tbody tr.expanded td {
       white-space: pre-wrap;
@@ -252,7 +256,7 @@ const EXPLORER_PAGE_HTML = `<!DOCTYPE html>
     #pagination {
       padding: 12px 24px;
       background: #fff;
-      border-top: 1px solid #ddd;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.08), 0 1px 2px rgba(0,0,0,0.06);
       display: flex;
       justify-content: space-between;
       align-items: center;
@@ -264,10 +268,11 @@ const EXPLORER_PAGE_HTML = `<!DOCTYPE html>
       cursor: pointer;
       background: #fff;
       border: 1px solid #ddd;
-      border-radius: 4px;
+      border-radius: 6px;
       margin-left: 8px;
+      transition: all 0.15s ease;
     }
-    #pagination button:hover:not(:disabled) { background: #f5f5f5; }
+    #pagination button:hover:not(:disabled) { background: #f8f9fa; }
     #pagination button:disabled { opacity: 0.5; cursor: default; }
     #empty {
       display: flex;

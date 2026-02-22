@@ -19,6 +19,7 @@ services:
   python-runner: {}
   plugin-runner:
     volumes:
+      - {{ HM_DATA_DIR }}/main:/config
       - {{ HM_DATA_DIR }}/plugins:/plugins
       - {{ HM_CACHE_DIR }}/plugins:/cache
   coder:

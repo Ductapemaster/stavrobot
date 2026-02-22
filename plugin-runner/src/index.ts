@@ -4,10 +4,14 @@ import path from "path";
 import { execFileSync, spawn } from "child_process";
 
 const PLUGINS_DIR = "/plugins";
+const CONFIG_TOML_PATH = "/config/config.toml";
 const TOOL_TIMEOUT_MS = 30_000;
 const ASYNC_TIMEOUT_MS = 300_000; // 5 minutes for async scripts.
 const APP_INTERNAL_URL = "http://app:3001/chat";
 const INSTRUCTIONS_MAX_LENGTH = 5000;
+
+// Loaded once at startup. Undefined if the config file is missing or has no password field.
+let appPassword: string | undefined;
 
 // Maximum length of a Unix username on Linux is 32 characters.
 const MAX_USERNAME_LENGTH = 32;
@@ -442,6 +446,58 @@ function findTool(bundle: LoadedBundle, toolName: string): LoadedTool | null {
 
 function isEditable(pluginName: string): boolean {
   return !fs.existsSync(path.join(PLUGINS_DIR, pluginName, ".git"));
+}
+
+function loadAppPassword(): void {
+  try {
+    fs.chmodSync(CONFIG_TOML_PATH, 0o600);
+    const content = fs.readFileSync(CONFIG_TOML_PATH, "utf-8");
+    const match = content.match(/^password\s*=\s*"([^"]+)"$/m);
+    if (match === null) {
+      console.warn("[stavrobot-plugin-runner] No password field found in config.toml; config endpoint will be unavailable");
+      return;
+    }
+    appPassword = match[1];
+    console.log("[stavrobot-plugin-runner] App password loaded from config.toml");
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.warn(`[stavrobot-plugin-runner] Could not read config.toml: ${message}; config endpoint will be unavailable`);
+  }
+}
+
+// This endpoint is auth-gated because config values may contain secrets (API keys, tokens).
+// It must never be exposed to the LLM agent — only the admin UI may call it.
+function handleGetBundleConfig(bundleName: string, request: http.IncomingMessage, response: http.ServerResponse): void {
+  if (appPassword === undefined) {
+    response.writeHead(401, { "Content-Type": "application/json" });
+    response.end(JSON.stringify({ error: "Config endpoint unavailable: no password configured" }));
+    return;
+  }
+
+  const authHeader = request.headers["authorization"];
+  if (typeof authHeader !== "string" || authHeader !== `Bearer ${appPassword}`) {
+    response.writeHead(401, { "Content-Type": "application/json" });
+    response.end(JSON.stringify({ error: "Unauthorized" }));
+    return;
+  }
+
+  loadBundles();
+
+  const bundle = findBundle(bundleName);
+  if (bundle === null) {
+    response.writeHead(404, { "Content-Type": "application/json" });
+    response.end(JSON.stringify({ error: "Bundle not found" }));
+    return;
+  }
+
+  const schema = bundle.manifest.config ?? {};
+  const configPath = path.join(bundle.bundleDir, "config.json");
+  const rawValues = readJsonFile(configPath);
+  const values = typeof rawValues === "object" && rawValues !== null ? rawValues : {};
+
+  console.log(`[stavrobot-plugin-runner] Returning config for bundle "${bundleName}"`);
+  response.writeHead(200, { "Content-Type": "application/json" });
+  response.end(JSON.stringify({ schema, values }));
 }
 
 function handleListBundles(response: http.ServerResponse): void {
@@ -1164,6 +1220,12 @@ async function handleRequest(
       return;
     }
 
+    const getBundleConfigMatch = url.match(/^\/bundles\/([^/]+)\/config$/);
+    if (method === "GET" && getBundleConfigMatch !== null) {
+      handleGetBundleConfig(getBundleConfigMatch[1], request, response);
+      return;
+    }
+
     const runToolMatch = url.match(/^\/bundles\/([^/]+)\/tools\/([^/]+)\/run$/);
     if (method === "POST" && runToolMatch !== null) {
       await handleRunTool(runToolMatch[1], runToolMatch[2], request, response);
@@ -1206,6 +1268,7 @@ async function handleRequest(
 }
 
 async function main(): Promise<void> {
+  loadAppPassword();
   migrateExistingPlugins();
   loadBundles();
 

@@ -1,0 +1,558 @@
+import http from "http";
+
+const PLUGIN_RUNNER_BASE_URL = "http://plugin-runner:3003";
+
+async function readRequestBody(request: http.IncomingMessage): Promise<string> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of request) {
+    chunks.push(chunk);
+  }
+  return Buffer.concat(chunks).toString("utf-8");
+}
+
+export async function handlePluginsListRequest(
+  response: http.ServerResponse,
+): Promise<void> {
+  console.log("[stavrobot] handlePluginsListRequest: proxying GET /bundles");
+  const pluginResponse = await fetch(`${PLUGIN_RUNNER_BASE_URL}/bundles`);
+  const body = await pluginResponse.text();
+  console.log("[stavrobot] handlePluginsListRequest: response status", pluginResponse.status);
+  response.writeHead(pluginResponse.status, { "Content-Type": "application/json" });
+  response.end(body);
+}
+
+export async function handlePluginDetailRequest(
+  response: http.ServerResponse,
+  pluginName: string,
+): Promise<void> {
+  console.log("[stavrobot] handlePluginDetailRequest: proxying GET /bundles/:name for", pluginName);
+  const pluginResponse = await fetch(`${PLUGIN_RUNNER_BASE_URL}/bundles/${encodeURIComponent(pluginName)}`);
+  const body = await pluginResponse.text();
+  console.log("[stavrobot] handlePluginDetailRequest: response status", pluginResponse.status);
+  response.writeHead(pluginResponse.status, { "Content-Type": "application/json" });
+  response.end(body);
+}
+
+// This returns actual config values which may contain secrets. It is only exposed on the
+// authenticated main server (port 3000). It must never be exposed to the LLM agent.
+export async function handlePluginConfigRequest(
+  response: http.ServerResponse,
+  pluginName: string,
+  password: string | undefined,
+): Promise<void> {
+  if (password === undefined) {
+    response.writeHead(500, { "Content-Type": "application/json" });
+    response.end(JSON.stringify({ error: "Server password not configured; cannot proxy config request." }));
+    return;
+  }
+  console.log("[stavrobot] handlePluginConfigRequest: proxying GET /bundles/:name/config for", pluginName);
+  const pluginResponse = await fetch(
+    `${PLUGIN_RUNNER_BASE_URL}/bundles/${encodeURIComponent(pluginName)}/config`,
+    {
+      headers: { "Authorization": `Bearer ${password}` },
+    },
+  );
+  const body = await pluginResponse.text();
+  console.log("[stavrobot] handlePluginConfigRequest: response status", pluginResponse.status);
+  response.writeHead(pluginResponse.status, { "Content-Type": "application/json" });
+  response.end(body);
+}
+
+export async function handlePluginInstallRequest(
+  request: http.IncomingMessage,
+  response: http.ServerResponse,
+): Promise<void> {
+  const body = await readRequestBody(request);
+  console.log("[stavrobot] handlePluginInstallRequest: proxying POST /install");
+  const pluginResponse = await fetch(`${PLUGIN_RUNNER_BASE_URL}/install`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body,
+  });
+  const responseBody = await pluginResponse.text();
+  console.log("[stavrobot] handlePluginInstallRequest: response status", pluginResponse.status);
+  response.writeHead(pluginResponse.status, { "Content-Type": "application/json" });
+  response.end(responseBody);
+}
+
+export async function handlePluginUpdateRequest(
+  request: http.IncomingMessage,
+  response: http.ServerResponse,
+): Promise<void> {
+  const body = await readRequestBody(request);
+  console.log("[stavrobot] handlePluginUpdateRequest: proxying POST /update");
+  const pluginResponse = await fetch(`${PLUGIN_RUNNER_BASE_URL}/update`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body,
+  });
+  const responseBody = await pluginResponse.text();
+  console.log("[stavrobot] handlePluginUpdateRequest: response status", pluginResponse.status);
+  response.writeHead(pluginResponse.status, { "Content-Type": "application/json" });
+  response.end(responseBody);
+}
+
+export async function handlePluginRemoveRequest(
+  request: http.IncomingMessage,
+  response: http.ServerResponse,
+): Promise<void> {
+  const body = await readRequestBody(request);
+  console.log("[stavrobot] handlePluginRemoveRequest: proxying POST /remove");
+  const pluginResponse = await fetch(`${PLUGIN_RUNNER_BASE_URL}/remove`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body,
+  });
+  const responseBody = await pluginResponse.text();
+  console.log("[stavrobot] handlePluginRemoveRequest: response status", pluginResponse.status);
+  response.writeHead(pluginResponse.status, { "Content-Type": "application/json" });
+  response.end(responseBody);
+}
+
+export async function handlePluginConfigureRequest(
+  request: http.IncomingMessage,
+  response: http.ServerResponse,
+): Promise<void> {
+  const body = await readRequestBody(request);
+  console.log("[stavrobot] handlePluginConfigureRequest: proxying POST /configure");
+  const pluginResponse = await fetch(`${PLUGIN_RUNNER_BASE_URL}/configure`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body,
+  });
+  const responseBody = await pluginResponse.text();
+  console.log("[stavrobot] handlePluginConfigureRequest: response status", pluginResponse.status);
+  response.writeHead(pluginResponse.status, { "Content-Type": "application/json" });
+  response.end(responseBody);
+}
+
+const PLUGINS_PAGE_HTML = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Plugins</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      background: #f8f9fa;
+      color: #1a1a1a;
+      padding: 24px;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+    }
+    h1 {
+      font-size: 22px;
+      font-weight: 600;
+      margin-bottom: 20px;
+    }
+    .install-form {
+      background: #fff;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.08), 0 1px 2px rgba(0,0,0,0.06);
+      border-radius: 8px;
+      padding: 16px;
+      margin-bottom: 24px;
+      display: flex;
+      gap: 8px;
+      align-items: flex-start;
+      flex-wrap: wrap;
+    }
+    .install-form input[type="text"] {
+      flex: 1;
+      min-width: 240px;
+      padding: 8px 10px;
+      border: 1px solid #ddd;
+      border-radius: 6px;
+      font-size: 14px;
+      transition: all 0.15s ease;
+    }
+    .install-form input[type="text"]:focus {
+      outline: none;
+      border-color: #d97706;
+      box-shadow: 0 0 0 3px rgba(217,119,6,0.1);
+    }
+    .install-form button {
+      padding: 8px 16px;
+      background: #d97706;
+      color: #fff;
+      border: none;
+      border-radius: 6px;
+      font-size: 14px;
+      cursor: pointer;
+      white-space: nowrap;
+      box-shadow: 0 1px 2px rgba(0,0,0,0.1);
+      transition: all 0.15s ease;
+    }
+    .install-form button:hover:not(:disabled) { background: #b45309; box-shadow: 0 2px 4px rgba(0,0,0,0.15); transform: translateY(-1px); }
+    .install-form button:disabled { opacity: 0.5; cursor: default; }
+    #install-message {
+      width: 100%;
+      font-size: 13px;
+      margin-top: 4px;
+    }
+    #install-message.success { color: #15803d; }
+    #install-message.error { color: #dc2626; }
+    #plugin-list {
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+    .plugin-card {
+      background: #fff;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.08), 0 1px 2px rgba(0,0,0,0.06);
+      border-radius: 8px;
+      padding: 16px;
+    }
+    .plugin-header {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 8px;
+    }
+    .plugin-name {
+      font-size: 16px;
+      font-weight: 600;
+    }
+    .plugin-badge {
+      font-size: 11px;
+      padding: 2px 7px;
+      border-radius: 10px;
+      background: #f0f0f0;
+      color: #666;
+      border: 1px solid #ddd;
+    }
+    .plugin-description {
+      font-size: 14px;
+      color: #444;
+      margin-bottom: 12px;
+    }
+    .tools-section {
+      margin-bottom: 12px;
+    }
+    .tools-section h3 {
+      font-size: 12px;
+      font-weight: 600;
+      color: #888;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-bottom: 6px;
+    }
+    .tool-item {
+      font-size: 13px;
+      padding: 4px 0;
+      border-bottom: 1px solid #f0f0f0;
+    }
+    .tool-item:last-child { border-bottom: none; }
+    .tool-name { font-weight: 500; }
+    .tool-description { color: #666; margin-left: 6px; }
+    .config-section {
+      margin-bottom: 12px;
+    }
+    .config-section h3 {
+      font-size: 12px;
+      font-weight: 600;
+      color: #888;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-bottom: 8px;
+    }
+    .config-field {
+      margin-bottom: 8px;
+    }
+    .config-field label {
+      display: block;
+      font-size: 12px;
+      font-weight: 500;
+      color: #555;
+      margin-bottom: 3px;
+    }
+    .config-field label .required-mark {
+      color: #dc2626;
+      margin-left: 2px;
+    }
+    .config-field input[type="text"] {
+      width: 100%;
+      padding: 6px 8px;
+      border: 1px solid #ddd;
+      border-radius: 6px;
+      font-size: 13px;
+      transition: all 0.15s ease;
+    }
+    .config-field input[type="text"]:focus {
+      outline: none;
+      border-color: #d97706;
+      box-shadow: 0 0 0 3px rgba(217,119,6,0.1);
+    }
+    .actions {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+    .btn {
+      padding: 6px 14px;
+      border: 1px solid #ddd;
+      border-radius: 6px;
+      font-size: 13px;
+      cursor: pointer;
+      background: #fff;
+      transition: all 0.15s ease;
+    }
+    .btn:hover:not(:disabled) { background: #f8f9fa; }
+    .btn:disabled { opacity: 0.5; cursor: default; }
+    .btn-primary {
+      background: #d97706;
+      color: #fff;
+      border-color: #d97706;
+      box-shadow: 0 1px 2px rgba(0,0,0,0.1);
+    }
+    .btn-primary:hover:not(:disabled) { background: #b45309; border-color: #b45309; box-shadow: 0 2px 4px rgba(0,0,0,0.15); transform: translateY(-1px); }
+    .btn-danger {
+      color: #dc2626;
+      border-color: #fca5a5;
+    }
+    .btn-danger:hover:not(:disabled) { background: #fef2f2; }
+    .card-message {
+      font-size: 13px;
+      margin-top: 8px;
+    }
+    .card-message.success { color: #15803d; }
+    .card-message.error { color: #dc2626; }
+    #loading {
+      color: #888;
+      font-size: 14px;
+      padding: 24px 0;
+    }
+  </style>
+</head>
+<body>
+  <h1>Plugins</h1>
+
+  <div class="install-form">
+    <input type="text" id="install-url" placeholder="Git repository URL..." />
+    <button id="install-btn" onclick="installPlugin()">Install</button>
+    <div id="install-message"></div>
+  </div>
+
+  <div id="plugin-list">
+    <div id="loading">Loading plugins...</div>
+  </div>
+
+  <script>
+    function escapeHtml(text) {
+      const div = document.createElement("div");
+      div.textContent = String(text);
+      return div.innerHTML;
+    }
+
+    async function loadPlugins() {
+      const listEl = document.getElementById("plugin-list");
+      listEl.innerHTML = '<div id="loading">Loading plugins...</div>';
+
+      const listResponse = await fetch("/api/plugins/list");
+      const listData = await listResponse.json();
+      const plugins = listData.plugins || [];
+
+      if (plugins.length === 0) {
+        listEl.innerHTML = '<div id="loading">No plugins installed.</div>';
+        return;
+      }
+
+      // Fetch detail and config for all plugins in parallel.
+      const pluginData = await Promise.all(plugins.map(async (plugin) => {
+        const [detailResponse, configResponse] = await Promise.all([
+          fetch(\`/api/plugins/\${encodeURIComponent(plugin.name)}/detail\`),
+          fetch(\`/api/plugins/\${encodeURIComponent(plugin.name)}/config\`),
+        ]);
+        const detail = await detailResponse.json();
+        const config = await configResponse.json();
+        return { plugin, detail, config };
+      }));
+
+      listEl.innerHTML = "";
+      for (const { plugin, detail, config } of pluginData) {
+        listEl.appendChild(renderPluginCard(plugin, detail, config));
+      }
+    }
+
+    function renderPluginCard(plugin, detail, config) {
+      const card = document.createElement("div");
+      card.className = "plugin-card";
+      card.id = "card-" + plugin.name;
+
+      const tools = detail.tools || [];
+      const schema = (config && config.schema) ? config.schema : {};
+      const values = (config && config.values) ? config.values : {};
+      const hasConfig = Object.keys(schema).length > 0;
+
+      const toolsHtml = tools.length > 0
+        ? \`<div class="tools-section">
+            <h3>Tools (\${tools.length})</h3>
+            \${tools.map(tool => \`
+              <div class="tool-item">
+                <span class="tool-name">\${escapeHtml(tool.name)}</span>
+                \${tool.description ? \`<span class="tool-description">— \${escapeHtml(tool.description)}</span>\` : ""}
+              </div>
+            \`).join("")}
+          </div>\`
+        : "";
+
+      const configHtml = hasConfig
+        ? \`<div class="config-section">
+            <h3>Configuration</h3>
+            \${Object.entries(schema).map(([key, fieldSchema]) => {
+              const field = fieldSchema;
+              const currentValue = values[key] !== undefined ? values[key] : "";
+              const isRequired = field.required === true;
+              return \`<div class="config-field">
+                <label>
+                  \${escapeHtml(key)}\${isRequired ? '<span class="required-mark">*</span>' : ""}
+                </label>
+                <input type="text"
+                  id="config-\${escapeHtml(plugin.name)}-\${escapeHtml(key)}"
+                  data-key="\${escapeHtml(key)}"
+                  placeholder="\${field.description ? escapeHtml(field.description) : ""}"
+                  value="\${escapeHtml(String(currentValue))}"
+                />
+              </div>\`;
+            }).join("")}
+            <div class="actions" style="margin-top:8px;">
+              <button class="btn btn-primary" onclick="saveConfig('\${escapeHtml(plugin.name)}')">Save config</button>
+            </div>
+          </div>\`
+        : "";
+
+      const updateBtn = plugin.editable === false
+        ? \`<button class="btn" onclick="updatePlugin('\${escapeHtml(plugin.name)}')">Update</button>\`
+        : "";
+
+      card.innerHTML = \`
+        <div class="plugin-header">
+          <span class="plugin-name">\${escapeHtml(plugin.name)}</span>
+          <span class="plugin-badge">\${plugin.editable ? "editable" : "git"}</span>
+        </div>
+        \${plugin.description ? \`<div class="plugin-description">\${escapeHtml(plugin.description)}</div>\` : ""}
+        \${toolsHtml}
+        \${configHtml}
+        <div class="actions">
+          \${updateBtn}
+          <button class="btn btn-danger" onclick="deletePlugin('\${escapeHtml(plugin.name)}')">Delete</button>
+        </div>
+        <div class="card-message" id="msg-\${escapeHtml(plugin.name)}"></div>
+      \`;
+
+      for (const input of card.querySelectorAll(".config-field input[data-key]")) {
+        input.addEventListener("keydown", (event) => {
+          if (event.key === "Enter") saveConfig(plugin.name);
+        });
+      }
+
+      return card;
+    }
+
+    function showCardMessage(pluginName, text, isError) {
+      const el = document.getElementById("msg-" + pluginName);
+      if (!el) return;
+      el.textContent = text;
+      el.className = "card-message " + (isError ? "error" : "success");
+    }
+
+    async function installPlugin() {
+      const urlInput = document.getElementById("install-url");
+      const btn = document.getElementById("install-btn");
+      const msgEl = document.getElementById("install-message");
+      const url = urlInput.value.trim();
+      if (!url) return;
+
+      btn.disabled = true;
+      btn.textContent = "Installing...";
+      msgEl.textContent = "";
+      msgEl.className = "";
+
+      const response = await fetch("/api/plugins/install", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url }),
+      });
+      const data = await response.json();
+
+      btn.disabled = false;
+      btn.textContent = "Install";
+
+      if (response.ok) {
+        msgEl.textContent = data.message || "Installed successfully.";
+        msgEl.className = "success";
+        urlInput.value = "";
+        await loadPlugins();
+      } else {
+        msgEl.textContent = data.error || data.message || "Installation failed.";
+        msgEl.className = "error";
+      }
+    }
+
+    async function updatePlugin(name) {
+      showCardMessage(name, "Updating...", false);
+      const response = await fetch("/api/plugins/update", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name }),
+      });
+      const data = await response.json();
+      if (response.ok) {
+        showCardMessage(name, data.message || "Updated successfully.", false);
+        await loadPlugins();
+      } else {
+        showCardMessage(name, data.error || data.message || "Update failed.", true);
+      }
+    }
+
+    async function deletePlugin(name) {
+      if (!window.confirm("Delete plugin \\"" + name + "\\"? This cannot be undone.")) return;
+      showCardMessage(name, "Deleting...", false);
+      const response = await fetch("/api/plugins/remove", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name }),
+      });
+      const data = await response.json();
+      if (response.ok) {
+        await loadPlugins();
+      } else {
+        showCardMessage(name, data.error || data.message || "Delete failed.", true);
+      }
+    }
+
+    async function saveConfig(name) {
+      const card = document.getElementById("card-" + name);
+      const inputs = card.querySelectorAll(".config-field input[data-key]");
+      const config = {};
+      for (const input of inputs) {
+        config[input.dataset.key] = input.value;
+      }
+      showCardMessage(name, "Saving...", false);
+      const response = await fetch("/api/plugins/configure", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, config }),
+      });
+      const data = await response.json();
+      if (response.ok) {
+        showCardMessage(name, data.message || "Config saved.", false);
+      } else {
+        showCardMessage(name, data.error || data.message || "Failed to save config.", true);
+      }
+    }
+
+    loadPlugins();
+
+    document.getElementById("install-url").addEventListener("keydown", (event) => {
+      if (event.key === "Enter") installPlugin();
+    });
+  </script>
+</body>
+</html>`;
+
+export function servePluginsPage(response: http.ServerResponse): void {
+  response.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+  response.end(PLUGINS_PAGE_HTML);
+}

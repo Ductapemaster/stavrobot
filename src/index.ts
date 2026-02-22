@@ -17,6 +17,16 @@ import {
 } from "./explorer.js";
 import { handleUploadRequest, saveAttachment } from "./uploads.js";
 import type { FileAttachment } from "./uploads.js";
+import {
+  servePluginsPage,
+  handlePluginsListRequest,
+  handlePluginDetailRequest,
+  handlePluginConfigRequest,
+  handlePluginInstallRequest,
+  handlePluginUpdateRequest,
+  handlePluginRemoveRequest,
+  handlePluginConfigureRequest,
+} from "./plugins.js";
 
 function isPublicRoute(method: string, pathname: string): boolean {
   if (method === "POST" && pathname === "/telegram/webhook") {
@@ -413,6 +423,24 @@ async function main(): Promise<void> {
         response.writeHead(404, { "Content-Type": "application/json" });
         response.end(JSON.stringify({ error: "Not found" }));
       }
+    } else if (request.method === "GET" && pathname === "/plugins") {
+      servePluginsPage(response);
+    } else if (request.method === "GET" && pathname === "/api/plugins/list") {
+      void handlePluginsListRequest(response);
+    } else if (request.method === "GET" && pathname.startsWith("/api/plugins/") && pathname.endsWith("/detail")) {
+      const name = decodeURIComponent(pathname.slice("/api/plugins/".length, -"/detail".length));
+      void handlePluginDetailRequest(response, name);
+    } else if (request.method === "GET" && pathname.startsWith("/api/plugins/") && pathname.endsWith("/config")) {
+      const name = decodeURIComponent(pathname.slice("/api/plugins/".length, -"/config".length));
+      void handlePluginConfigRequest(response, name, config.password);
+    } else if (request.method === "POST" && pathname === "/api/plugins/install") {
+      void handlePluginInstallRequest(request, response);
+    } else if (request.method === "POST" && pathname === "/api/plugins/update") {
+      void handlePluginUpdateRequest(request, response);
+    } else if (request.method === "POST" && pathname === "/api/plugins/remove") {
+      void handlePluginRemoveRequest(request, response);
+    } else if (request.method === "POST" && pathname === "/api/plugins/configure") {
+      void handlePluginConfigureRequest(request, response);
     } else if (request.method === "GET" && pathname.startsWith("/api/pages/") && pathname.includes("/queries/")) {
       void handlePageQueryRequest(request, response, pathname, config.password, pool, url);
     } else if (request.method === "GET" && pathname.startsWith("/pages/")) {
