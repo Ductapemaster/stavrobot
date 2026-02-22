@@ -2,6 +2,15 @@
 
 This file contains instructions for AI coding agents operating in this repository.
 
+## Architecture reference
+
+`ARCHITECTURE.md` is the authoritative reference for how the system works: containers,
+message flow, database schema, security model, plugin system, and more. Read it before
+exploring the repo — it will answer most structural questions faster than grepping. After
+any change that affects architecture (new containers, endpoints, tools, database tables,
+security boundaries, message flow, etc.), update `ARCHITECTURE.md` to reflect the new
+state.
+
 ## Project overview
 
 Stavrobot is a TypeScript HTTP server that wraps an LLM-powered agent (Anthropic Claude
