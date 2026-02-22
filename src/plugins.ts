@@ -130,6 +130,7 @@ const PLUGINS_PAGE_HTML = `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Plugins</title>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -140,6 +141,9 @@ const PLUGINS_PAGE_HTML = `<!DOCTYPE html>
       padding: 24px;
       -webkit-font-smoothing: antialiased;
       -moz-osx-font-smoothing: grayscale;
+    }
+    @media (max-width: 480px) {
+      body { padding: 12px; }
     }
     h1 {
       font-size: 22px;
@@ -159,7 +163,8 @@ const PLUGINS_PAGE_HTML = `<!DOCTYPE html>
     }
     .install-form input[type="text"] {
       flex: 1;
-      min-width: 240px;
+      min-width: 0;
+      width: 100%;
       padding: 8px 10px;
       border: 1px solid #ddd;
       border-radius: 6px;
@@ -182,6 +187,10 @@ const PLUGINS_PAGE_HTML = `<!DOCTYPE html>
       white-space: nowrap;
       box-shadow: 0 1px 2px rgba(0,0,0,0.1);
       transition: all 0.15s ease;
+      width: 100%;
+    }
+    @media (min-width: 481px) {
+      .install-form button { width: auto; }
     }
     .install-form button:hover:not(:disabled) { background: #b45309; box-shadow: 0 2px 4px rgba(0,0,0,0.15); transform: translateY(-1px); }
     .install-form button:disabled { opacity: 0.5; cursor: default; }
@@ -245,6 +254,9 @@ const PLUGINS_PAGE_HTML = `<!DOCTYPE html>
     .tool-item:last-child { border-bottom: none; }
     .tool-name { font-weight: 500; }
     .tool-description { color: #666; margin-left: 6px; }
+    @media (max-width: 480px) {
+      .tool-description { display: block; margin-left: 0; margin-top: 2px; }
+    }
     .config-section {
       margin-bottom: 12px;
     }
@@ -288,6 +300,10 @@ const PLUGINS_PAGE_HTML = `<!DOCTYPE html>
       gap: 8px;
       align-items: center;
       flex-wrap: wrap;
+    }
+    @media (max-width: 480px) {
+      .actions { flex-direction: column; }
+      .actions .btn { width: 100%; text-align: center; }
     }
     .btn {
       padding: 6px 14px;
