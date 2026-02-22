@@ -20,6 +20,34 @@ A personal AI assistant with persistent memory, sandboxed code execution, and Si
 - **Apps.** The agent can create dynamic web apps. Apps are private (auth-required) by default, with an option to make individual pages public.
 - **Conversation compaction.** Auto-summarizes long conversation histories to stay within context limits.
 
+## Knowledge system
+
+Stavrobot has a two-tier knowledge system: **Memories** and a **scratchpad**. It will
+manage these two fairly well on its own, but they're important for you to know because
+you will want to help the bot use them properly.
+
+**Memories** are always injected into the system prompt wholesale. You should be frugal
+with these, as they get included in the context every time, and having many of them can
+increase the context. An example of a good memory would be "the user prefers chatting in
+an informal style.", something that the bot should know about every time, even if that
+costs in additional context length.
+
+**The scratchpad** is where the bot keeps less frequently-accessed knowledge, but
+knowledge that pertains to a topic. Scratchpad entries have a title and a body, and the
+title gets injected into the context automatically. Use this for important, but
+less-frequently needed things, things that usually pertain to a specific topic.
+
+For example, a good scratchpad entry would be "dietary preferences", with details about
+what you like to eat, when, etc. The bot will see that there's a topic "dietary
+preferences", but not load the actual text itself into the context automatically, only
+accessing it on-demand.
+
+When you're talking to the bot about food, it will know there's a "dietary preferences"
+scratchpad entry it can look at, and usually do that on its own.
+
+The bot will usually know well enough what to use when, but sometimes you will want to
+tell it explicitly what information to put where.
+
 ## How to make your own plugin
 
 See [PLUGIN.md](coder/PLUGIN.md) for everything you need to know to create a Stavrobot plugin. The same document works as a reference for both humans and LLMs.
