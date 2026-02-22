@@ -629,6 +629,38 @@ function formatUserMessage(userMessage: string, source?: string, sender?: string
   return `Time: ${time}\nSource: ${resolvedSource}\nSender: ${resolvedSender}\nText: ${userMessage}`;
 }
 
+const PLUGIN_RUNNER_BASE_URL = "http://plugin-runner:3003";
+
+interface PluginSummary {
+  name: string;
+  description: string;
+  editable: boolean;
+}
+
+async function fetchPluginListSection(): Promise<string | undefined> {
+  try {
+    const response = await fetch(`${PLUGIN_RUNNER_BASE_URL}/bundles`);
+    if (!response.ok) {
+      console.warn(`[stavrobot] fetchPluginListSection: plugin runner returned ${response.status}`);
+      return undefined;
+    }
+    const data = await response.json() as { plugins: PluginSummary[] };
+    const plugins = data.plugins;
+    if (plugins.length === 0) {
+      return undefined;
+    }
+    const lines = ["Available plugins:"];
+    for (const plugin of plugins) {
+      lines.push(`- ${plugin.name}: ${plugin.description}`);
+    }
+    console.log(`[stavrobot] fetchPluginListSection: injecting ${plugins.length} plugin(s) into system prompt`);
+    return lines.join("\n");
+  } catch (error) {
+    console.warn("[stavrobot] fetchPluginListSection: failed to fetch plugin list:", error instanceof Error ? error.message : String(error));
+    return undefined;
+  }
+}
+
 export async function handlePrompt(
   agent: Agent,
   pool: pg.Pool,
@@ -653,8 +685,14 @@ export async function handlePrompt(
     ? `${config.baseSystemPrompt}\n\n${config.customPrompt}`
     : config.baseSystemPrompt) + buildPromptSuffix(config.publicHostname);
 
+  const pluginListSection = await fetchPluginListSection();
+
+  const promptWithPlugins = pluginListSection !== undefined
+    ? `${effectiveBasePrompt}\n\n${pluginListSection}`
+    : effectiveBasePrompt;
+
   if (memories.length === 0) {
-    agent.setSystemPrompt(effectiveBasePrompt);
+    agent.setSystemPrompt(promptWithPlugins);
   } else {
     const memoryLines: string[] = [
       "These are your memories, they are things you stored yourself. Use the `update_memory` tool to update a memory, and the `delete_memory` tool to delete a memory. You should add anything that seems important to the user, anything that might have bearing on the future, or anything that will be important to recall later. However, do keep them to a few paragraphs, to avoid filling up the context.",
@@ -675,7 +713,7 @@ export async function handlePrompt(
     }
 
     const injectionText = memoryLines.join("\n");
-    agent.setSystemPrompt(`${effectiveBasePrompt}\n\n${injectionText}`);
+    agent.setSystemPrompt(`${promptWithPlugins}\n\n${injectionText}`);
   }
 
   const savePromises: Promise<void>[] = [];
