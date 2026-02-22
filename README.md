@@ -10,7 +10,7 @@ A personal AI assistant with persistent memory, sandboxed code execution, and Si
 - **Plugins.** Install plugins and extend Stavrobot's capabilities by just giving it a git repo URL. Plugins are isolated from each other — each runs as a dedicated system user with no access to other plugins' files or configuration.
 - **Signal integration.** Two-way messaging via signal-cli, including voice note transcription (OpenAI STT).
 - **Telegram integration.** Two-way messaging via a Telegram bot webhook, including voice note transcription (OpenAI STT).
-- **Two-tier memory.** Tier 1: a self-managed memory store injected into the system prompt every turn (the agent decides what to remember). Tier 2: full read/write access to a PostgreSQL database via unrestricted SQL — the agent can create tables, query, and store anything.
+- **Three-tier knowledge.** Tier 1 (memories): a self-managed memory store injected into the system prompt every turn — for things the agent needs constantly. Tier 2 (scratchpad): titled entries whose titles are always in context but whose bodies are loaded on demand — for important but less-frequently needed knowledge. Tier 3 (database): full read/write access to PostgreSQL via unrestricted SQL — the agent can create tables, query, and store anything.
 - **Self-programming.** The agent can request a secondary coding agent to create new tools at runtime. Tools are executable scripts with a JSON manifest, discovered and invoked by the main agent.
 - **Sandboxed Python execution.** Arbitrary Python with pip dependencies via `uv`, isolated from the host environment.
 - **Cron scheduling.** The agent can schedule its own recurring or one-shot reminders.
@@ -22,9 +22,9 @@ A personal AI assistant with persistent memory, sandboxed code execution, and Si
 
 ## Knowledge system
 
-Stavrobot has a two-tier knowledge system: **Memories** and a **scratchpad**. It will
-manage these two fairly well on its own, but they're important for you to know because
-you will want to help the bot use them properly.
+Stavrobot has a three-tier knowledge system: **memories**, a **scratchpad**, and the
+**database**. It will manage these fairly well on its own, but they're important for you
+to know because you will want to help the bot use them properly.
 
 **Memories** are always injected into the system prompt wholesale. You should be frugal
 with these, as they get included in the context every time, and having many of them can
@@ -44,6 +44,12 @@ accessing it on-demand.
 
 When you're talking to the bot about food, it will know there's a "dietary preferences"
 scratchpad entry it can look at, and usually do that on its own.
+
+**The database** is the third tier, for structured or bulk data that doesn't belong in
+memories or the scratchpad. The bot has full read/write access to PostgreSQL via
+unrestricted SQL, so it can create tables, run queries, and store anything. Use this for
+things like lists, logs, structured records, or any data that's better queried than read
+as prose.
 
 The bot will usually know well enough what to use when, but sometimes you will want to
 tell it explicitly what information to put where.
