@@ -3,11 +3,13 @@ import path from "node:path";
 import pg from "pg";
 import { Type, getModel, type TextContent, type ImageContent, type AssistantMessage, type ToolCall, complete } from "@mariozechner/pi-ai";
 import { Agent, type AgentTool, type AgentToolResult, type AgentMessage } from "@mariozechner/pi-agent-core";
-import type { Config, TelegramConfig, TtsConfig } from "./config.js";
+import type { Config, TtsConfig } from "./config.js";
+import { isInAllowlist } from "./config.js";
 import type { FileAttachment } from "./uploads.js";
 import { transcribeAudio } from "./stt.js";
 import { getApiKey } from "./auth.js";
-import { executeSql, loadMessages, saveMessage, saveCompaction, loadLatestCompaction, loadAllMemories, upsertMemory, deleteMemory, upsertScratchpad, deleteScratchpad, createCronEntry, updateCronEntry, deleteCronEntry, listCronEntries, loadAllScratchpadTitles, type Memory } from "./database.js";
+import { executeSql, loadMessages, saveMessage, saveCompaction, loadLatestCompaction, loadAllMemories, upsertMemory, deleteMemory, upsertScratchpad, deleteScratchpad, createCronEntry, updateCronEntry, deleteCronEntry, listCronEntries, loadAllScratchpadTitles, resolveRecipient, resolveInterlocutorByName, getMainAgentId, loadAgent, type Memory } from "./database.js";
+import type { RoutingResult } from "./queue.js";
 import { reloadScheduler } from "./scheduler.js";
 import { createWebSearchTool } from "./web-search.js";
 import { createWebFetchTool } from "./web-fetch.js";
@@ -15,6 +17,9 @@ import { createManagePluginsTool, createRunPluginToolTool, createRequestCodingTa
 import { createRunPythonTool } from "./python.js";
 import { createManagePagesTool } from "./pages.js";
 import { createManageFilesTool } from "./files.js";
+import { createManageInterlocutorsTool } from "./interlocutors.js";
+import { createManageAgentsTool } from "./agents.js";
+import { createSendAgentMessageTool } from "./send-agent-message.js";
 import { createSearchTool } from "./search.js";
 import { createManageUploadsTool } from "./upload-tools.js";
 import { convertMarkdownToTelegramHtml } from "./telegram.js";
@@ -34,12 +39,18 @@ function buildPromptSuffix(publicHostname: string): string {
 // rather than queue, because queuing would compact already-compacted messages.
 let compactionInProgress = false;
 
-// Set to true when a background compaction finishes successfully. The next
-// handlePrompt call checks this flag and reloads messages from the DB so the
-// in-memory state reflects the compacted history.
-let compactionCompleted = false;
+// Set to the agent ID whose compaction just finished. The next handlePrompt
+// call for that agent checks this and reloads messages from the DB. Stored as
+// an ID rather than a boolean so that a compaction for agent A does not trigger
+// a reload when the next message is for agent B.
+let compactionCompletedForAgent: number | null = null;
 
-const STAVROBOT_DEBUG = process.env.STAVROBOT_DEBUG === "1";
+// The agent ID currently being processed by handlePrompt. Set at the start of
+// each handlePrompt call. The queue is single-threaded so there is no race
+// condition. The send_agent_message tool reads this to identify the sender.
+export let currentAgentId: number = 0;
+
+export const STAVROBOT_DEBUG = process.env.STAVROBOT_DEBUG === "1";
 
 export function createExecuteSqlTool(pool: pg.Pool): AgentTool {
   return {
@@ -318,13 +329,13 @@ export function createTextToSpeechTool(ttsConfig: TtsConfig): AgentTool {
   };
 }
 
-export function createSendSignalMessageTool(): AgentTool {
+export function createSendSignalMessageTool(pool: pg.Pool, config: Config): AgentTool {
   return {
     name: "send_signal_message",
     label: "Send Signal message",
-    description: "Send a message via Signal to a phone number. Can send text, a file attachment (from manage_files or text_to_speech), or both.",
+    description: "Send a message via Signal to a display name or phone number. Can send text, a file attachment (from manage_files or text_to_speech), or both.",
     parameters: Type.Object({
-      recipient: Type.String({ description: "Phone number in international format (e.g., \"+1234567890\")." }),
+      recipient: Type.String({ description: "Display name of the recipient (e.g., \"Mom\") or phone number in international format (e.g., \"+1234567890\")." }),
       message: Type.Optional(Type.String({ description: "Text message to send." })),
       attachmentPath: Type.Optional(Type.String({ description: "File path to an attachment under the temp directory (e.g., from manage_files write or text_to_speech)." })),
     }),
@@ -338,17 +349,72 @@ export function createSendSignalMessageTool(): AgentTool {
         attachmentPath?: string;
       };
 
-      const recipient = raw.recipient;
+      const recipientInput = raw.recipient;
       const message = raw.message?.trim() || undefined;
       const attachmentPath = raw.attachmentPath?.trim() || undefined;
 
-      console.log("[stavrobot] send_signal_message called:", { recipient, hasAttachment: attachmentPath !== undefined });
+      console.log("[stavrobot] send_signal_message called:", { recipient: recipientInput, hasAttachment: attachmentPath !== undefined });
 
       if (message === undefined && attachmentPath === undefined) {
         return {
           content: [{ type: "text" as const, text: "Error: at least one of message or attachmentPath must be provided." }],
           details: { message: "Error: at least one of message or attachmentPath must be provided." },
         };
+      }
+
+      // Resolve display name to phone number, falling back to treating the input as a raw phone number.
+      const resolved = await resolveRecipient(pool, recipientInput, "signal");
+      let recipient: string;
+      if (resolved !== null && !("disabled" in resolved)) {
+        recipient = resolved.identifier;
+      } else if (resolved !== null && "disabled" in resolved) {
+        const errorMessage = `Error: Interlocutor "${resolved.displayName}" is disabled.`;
+        console.warn("[stavrobot] send_signal_message rejected:", errorMessage);
+        return {
+          content: [{ type: "text" as const, text: errorMessage }],
+          details: { message: errorMessage },
+        };
+      } else {
+        // If the input matches an interlocutor by name but they have no Signal identity,
+        // give a specific error rather than falling through to the raw-ID path.
+        const interlocutor = await resolveInterlocutorByName(pool, recipientInput);
+        if (interlocutor !== null) {
+          const errorMessage = `Error: interlocutor '${recipientInput}' has no Signal identity. Use manage_interlocutors to add one.`;
+          console.warn("[stavrobot] send_signal_message rejected:", errorMessage);
+          return {
+            content: [{ type: "text" as const, text: errorMessage }],
+            details: { message: errorMessage },
+          };
+        }
+        // Soft gate: raw ID must exist in interlocutor_identities.
+        const identityCheck = await pool.query<{ identifier: string }>(
+          "SELECT identifier FROM interlocutor_identities WHERE service = 'signal' AND identifier = $1",
+          [recipientInput],
+        );
+        if (identityCheck.rows.length === 0) {
+          const errorMessage = `Error: unknown recipient '${recipientInput}'. No interlocutor found with that display name or phone number.`;
+          console.warn("[stavrobot] send_signal_message rejected:", errorMessage);
+          return {
+            content: [{ type: "text" as const, text: errorMessage }],
+            details: { message: errorMessage },
+          };
+        }
+        recipient = recipientInput;
+      }
+
+      // Hard gate: recipient must be in the config allowlist.
+      if (!isInAllowlist(config, "signal", recipient)) {
+        const errorMessage = `Error: recipient '${recipient}' is not in the Signal allowlist.`;
+        console.warn("[stavrobot] send_signal_message rejected:", errorMessage);
+        return {
+          content: [{ type: "text" as const, text: errorMessage }],
+          details: { message: errorMessage },
+        };
+      }
+
+      if (STAVROBOT_DEBUG) {
+        const preview = (message ?? "").slice(0, 200);
+        console.log(`[stavrobot] [debug] Sending: signal - ${recipient} - ${preview}`);
       }
 
       if (attachmentPath !== undefined) {
@@ -428,13 +494,13 @@ export function createSendSignalMessageTool(): AgentTool {
   };
 }
 
-export function createSendTelegramMessageTool(config: TelegramConfig): AgentTool {
+export function createSendTelegramMessageTool(pool: pg.Pool, config: Config): AgentTool {
   return {
     name: "send_telegram_message",
     label: "Send Telegram message",
-    description: "Send a message via Telegram to a chat ID. Can send text, a file attachment (image, audio, or any other file), or both.",
+    description: "Send a message via Telegram to a display name or chat ID. Can send text, a file attachment (image, audio, or any other file), or both.",
     parameters: Type.Object({
-      recipient: Type.String({ description: "Telegram chat ID to send the message to." }),
+      recipient: Type.String({ description: "Display name of the recipient (e.g., \"Mom\") or Telegram chat ID." }),
       message: Type.Optional(Type.String({ description: "Text message to send. Markdown formatting is supported." })),
       attachmentPath: Type.Optional(Type.String({ description: "File path to an attachment under the temp directory (e.g., from manage_files write or text_to_speech). Images (jpg, jpeg, png, gif, webp), audio (mp3, ogg, oga, wav, m4a), and any other file type are supported." })),
     }),
@@ -448,11 +514,11 @@ export function createSendTelegramMessageTool(config: TelegramConfig): AgentTool
         attachmentPath?: string;
       };
 
-      const recipient = raw.recipient;
+      const recipientInput = raw.recipient;
       const message = raw.message?.trim() || undefined;
       const attachmentPath = raw.attachmentPath?.trim() || undefined;
 
-      console.log("[stavrobot] send_telegram_message called:", { recipient, hasAttachment: attachmentPath !== undefined });
+      console.log("[stavrobot] send_telegram_message called:", { recipient: recipientInput, hasAttachment: attachmentPath !== undefined });
 
       if (message === undefined && attachmentPath === undefined) {
         return {
@@ -461,7 +527,70 @@ export function createSendTelegramMessageTool(config: TelegramConfig): AgentTool
         };
       }
 
-      const baseUrl = `https://api.telegram.org/bot${config.botToken}`;
+      if (config.telegram === undefined) {
+        const errorMessage = "Error: Telegram is not configured.";
+        return {
+          content: [{ type: "text" as const, text: errorMessage }],
+          details: { message: errorMessage },
+        };
+      }
+
+      // Resolve display name to chat ID, falling back to treating the input as a raw chat ID.
+      const resolved = await resolveRecipient(pool, recipientInput, "telegram");
+      let recipient: string;
+      if (resolved !== null && !("disabled" in resolved)) {
+        recipient = resolved.identifier;
+      } else if (resolved !== null && "disabled" in resolved) {
+        const errorMessage = `Error: Interlocutor "${resolved.displayName}" is disabled.`;
+        console.warn("[stavrobot] send_telegram_message rejected:", errorMessage);
+        return {
+          content: [{ type: "text" as const, text: errorMessage }],
+          details: { message: errorMessage },
+        };
+      } else {
+        // If the input matches an interlocutor by name but they have no Telegram identity,
+        // give a specific error rather than falling through to the raw-ID path.
+        const interlocutor = await resolveInterlocutorByName(pool, recipientInput);
+        if (interlocutor !== null) {
+          const errorMessage = `Error: interlocutor '${recipientInput}' has no Telegram identity. Use manage_interlocutors to add one.`;
+          console.warn("[stavrobot] send_telegram_message rejected:", errorMessage);
+          return {
+            content: [{ type: "text" as const, text: errorMessage }],
+            details: { message: errorMessage },
+          };
+        }
+        // Soft gate: raw ID must exist in interlocutor_identities.
+        const identityCheck = await pool.query<{ identifier: string }>(
+          "SELECT identifier FROM interlocutor_identities WHERE service = 'telegram' AND identifier = $1",
+          [recipientInput],
+        );
+        if (identityCheck.rows.length === 0) {
+          const errorMessage = `Error: unknown recipient '${recipientInput}'. No interlocutor found with that display name or chat ID.`;
+          console.warn("[stavrobot] send_telegram_message rejected:", errorMessage);
+          return {
+            content: [{ type: "text" as const, text: errorMessage }],
+            details: { message: errorMessage },
+          };
+        }
+        recipient = recipientInput;
+      }
+
+      // Hard gate: recipient must be in the config allowlist.
+      if (!isInAllowlist(config, "telegram", recipient)) {
+        const errorMessage = `Error: recipient '${recipient}' is not in the Telegram allowlist.`;
+        console.warn("[stavrobot] send_telegram_message rejected:", errorMessage);
+        return {
+          content: [{ type: "text" as const, text: errorMessage }],
+          details: { message: errorMessage },
+        };
+      }
+
+      const baseUrl = `https://api.telegram.org/bot${config.telegram.botToken}`;
+
+      if (STAVROBOT_DEBUG) {
+        const preview = (message ?? "").slice(0, 200);
+        console.log(`[stavrobot] [debug] Sending: telegram - ${recipient} - ${preview}`);
+      }
 
       if (attachmentPath !== undefined) {
         const resolvedAttachmentPath = path.resolve(attachmentPath);
@@ -532,7 +661,7 @@ export function createSendTelegramMessageTool(config: TelegramConfig): AgentTool
       // Text-only path: convert markdown to Telegram HTML and call sendMessage.
       const htmlText = await convertMarkdownToTelegramHtml(message as string);
       try {
-        await sendTelegramMessage(config.botToken, recipient, htmlText);
+        await sendTelegramMessage(config.telegram.botToken, recipient, htmlText);
       } catch (error) {
         const errorMessage = `Error: ${error instanceof Error ? error.message : String(error)}`;
         console.error("[stavrobot] send_telegram_message sendMessage error:", errorMessage);
@@ -706,8 +835,7 @@ export function createManageCronTool(pool: pg.Pool): AgentTool {
 
 export async function createAgent(config: Config, pool: pg.Pool): Promise<Agent> {
   const model = getModel(config.provider as any, config.model as any);
-  const messages = await loadMessages(pool);
-  const tools = [createExecuteSqlTool(pool), createManageKnowledgeTool(pool), createSendSignalMessageTool(), createManageCronTool(pool), createRunPythonTool(), createManagePagesTool(pool), createManageUploadsTool(), createSearchTool(pool), createManageFilesTool()];
+  const tools = [createExecuteSqlTool(pool), createManageKnowledgeTool(pool), createSendSignalMessageTool(pool, config), createManageCronTool(pool), createRunPythonTool(), createManagePagesTool(pool), createManageUploadsTool(), createSearchTool(pool), createManageFilesTool(), createManageInterlocutorsTool(pool), createManageAgentsTool(pool), createSendAgentMessageTool(pool, () => currentAgentId)];
   if (config.webSearch !== undefined) {
     tools.push(createWebSearchTool(config.webSearch));
   }
@@ -727,7 +855,7 @@ export async function createAgent(config: Config, pool: pg.Pool): Promise<Agent>
     );
   }
   if (config.telegram !== undefined) {
-    tools.push(createSendTelegramMessageTool(config.telegram));
+    tools.push(createSendTelegramMessageTool(pool, config));
   }
 
   const effectiveBasePrompt = (config.customPrompt !== undefined
@@ -739,7 +867,7 @@ export async function createAgent(config: Config, pool: pg.Pool): Promise<Agent>
       systemPrompt: effectiveBasePrompt,
       model,
       tools,
-      messages,
+      messages: [],
     },
     getApiKey: () => getApiKey(config),
   });
@@ -858,75 +986,117 @@ export async function handlePrompt(
   pool: pg.Pool,
   userMessage: string | undefined,
   config: Config,
+  routing: RoutingResult,
   source?: string,
-  sender?: string,
   audio?: string,
   audioContentType?: string,
   attachments?: FileAttachment[]
 ): Promise<string> {
-  if (compactionCompleted) {
-    const reloadedMessages = await loadMessages(pool);
-    agent.replaceMessages(reloadedMessages);
-    compactionCompleted = false;
-    console.log(`[stavrobot] Reloaded ${reloadedMessages.length} messages after background compaction.`);
+  const { agentId, senderIdentityId, senderAgentId, senderLabel, isMainAgent } = routing;
+
+  // Track the current agent ID so the send_agent_message tool can identify the
+  // sender. The queue is single-threaded so this is safe without locking.
+  currentAgentId = agentId;
+
+  // Always load and swap in the correct conversation's messages. replaceMessages()
+  // is a cheap array swap, and this ensures the agent always has the right history
+  // regardless of which agent received the previous message.
+  const conversationMessages = await loadMessages(pool, agentId);
+
+  // If a background compaction just finished for this agent, the reload above
+  // already picks up the compacted state. Clear the flag only when it matches
+  // the current agent so we don't discard a pending reload for a different
+  // conversation.
+  if (compactionCompletedForAgent === agentId) {
+    compactionCompletedForAgent = null;
+    console.log(`[stavrobot] Cleared compaction-completed flag for agent ${agentId}.`);
     if (STAVROBOT_DEBUG) {
-      console.log("[stavrobot] [compaction-debug] Reloaded messages:");
-      for (let i = 0; i < reloadedMessages.length; i++) {
-        const message = reloadedMessages[i];
+      console.log("[stavrobot] [debug] Reloaded messages:");
+      for (let i = 0; i < conversationMessages.length; i++) {
+        const message = conversationMessages[i];
         const textPreview = typeof message.content === "string"
           ? message.content.slice(0, 200)
           : Array.isArray(message.content)
             ? message.content.filter((block): block is TextContent => block.type === "text").map((block) => block.text).join("").slice(0, 200)
             : "";
-        console.log(`[stavrobot] [compaction-debug]   [${i}] role=${message.role} text=${textPreview}`);
+        console.log(`[stavrobot] [debug]   [${i}] role=${message.role} text=${textPreview}`);
       }
     }
   }
 
-  const memories = await loadAllMemories(pool);
-  const scratchpadTitles = await loadAllScratchpadTitles(pool);
-
-  const effectiveBasePrompt = (config.customPrompt !== undefined
-    ? `${config.baseSystemPrompt}\n\n${config.customPrompt}`
-    : config.baseSystemPrompt) + buildPromptSuffix(config.publicHostname);
+  agent.replaceMessages(conversationMessages);
+  console.log(`[stavrobot] Loaded ${conversationMessages.length} messages for agent ${agentId}.`);
 
   const pluginListSection = await fetchPluginListSection();
 
-  const promptWithPlugins = pluginListSection !== undefined
-    ? `${effectiveBasePrompt}\n\n${pluginListSection}`
-    : effectiveBasePrompt;
+  // Load the subagent's DB row once here so it can be used for both system
+  // prompt assembly and tool filtering without a second DB round-trip.
+  const subagentRow = isMainAgent ? null : await loadAgent(pool, agentId);
 
-  let systemPrompt = promptWithPlugins;
+  let systemPrompt: string;
 
-  if (memories.length > 0) {
-    const memoryLines: string[] = [
-      "These are your memories, they are things you stored yourself. Use the `manage_knowledge` tool (store: \"memory\") to upsert or delete memories. You should add anything that seems important to the user, anything that might have bearing on the future, or anything that will be important to recall later. Keep memories concise — they are injected in full every turn, so avoid storing large amounts of text here. Use the scratchpad for less frequent or longer-form knowledge.",
-      "",
-      "Here are your memories:",
-      "",
-    ];
+  if (isMainAgent) {
+    const memories = await loadAllMemories(pool);
+    const scratchpadTitles = await loadAllScratchpadTitles(pool);
 
-    for (const memory of memories) {
-      const created = memory.createdAt.toISOString();
-      const updated = memory.updatedAt.toISOString();
-      const timestamp = created === updated
-        ? `created ${created}`
-        : `created ${created}, updated ${updated}`;
-      memoryLines.push(`[Memory ${memory.id}] (${timestamp})`);
-      memoryLines.push(memory.content);
-      memoryLines.push("");
+    const effectiveBasePrompt = (config.customPrompt !== undefined
+      ? `${config.baseSystemPrompt}\n\n${config.customPrompt}`
+      : config.baseSystemPrompt) + buildPromptSuffix(config.publicHostname);
+
+    const promptWithPlugins = pluginListSection !== undefined
+      ? `${effectiveBasePrompt}\n\n${pluginListSection}`
+      : effectiveBasePrompt;
+
+    systemPrompt = promptWithPlugins;
+
+    if (memories.length > 0) {
+      const memoryLines: string[] = [
+        "These are your memories, they are things you stored yourself. Use the `manage_knowledge` tool (store: \"memory\") to upsert or delete memories. You should add anything that seems important to the user, anything that might have bearing on the future, or anything that will be important to recall later. Keep memories concise — they are injected in full every turn, so avoid storing large amounts of text here. Use the scratchpad for less frequent or longer-form knowledge.",
+        "",
+        "Here are your memories:",
+        "",
+      ];
+
+      for (const memory of memories) {
+        const created = memory.createdAt.toISOString();
+        const updated = memory.updatedAt.toISOString();
+        const timestamp = created === updated
+          ? `created ${created}`
+          : `created ${created}, updated ${updated}`;
+        memoryLines.push(`[Memory ${memory.id}] (${timestamp})`);
+        memoryLines.push(memory.content);
+        memoryLines.push("");
+      }
+
+      systemPrompt = `${systemPrompt}\n\n${memoryLines.join("\n")}`;
     }
 
-    systemPrompt = `${systemPrompt}\n\n${memoryLines.join("\n")}`;
-  }
-
-  if (scratchpadTitles.length > 0) {
-    const scratchpadLines = ["Your scratchpad (use manage_knowledge with store: \"scratchpad\" to upsert or delete entries; read bodies via execute_sql on the \"scratchpad\" table):", ""];
-    for (const entry of scratchpadTitles) {
-      scratchpadLines.push(`[Scratchpad ${entry.id}] ${entry.title}`);
+    if (scratchpadTitles.length > 0) {
+      const scratchpadLines = ["Your scratchpad (use manage_knowledge with store: \"scratchpad\" to upsert or delete entries; read bodies via execute_sql on the \"scratchpad\" table):", ""];
+      for (const entry of scratchpadTitles) {
+        scratchpadLines.push(`[Scratchpad ${entry.id}] ${entry.title}`);
+      }
+      console.log(`[stavrobot] Injecting ${scratchpadTitles.length} scratchpad title(s) into system prompt`);
+      systemPrompt = `${systemPrompt}\n\n${scratchpadLines.join("\n")}`;
     }
-    console.log(`[stavrobot] Injecting ${scratchpadTitles.length} scratchpad title(s) into system prompt`);
-    systemPrompt = `${systemPrompt}\n\n${scratchpadLines.join("\n")}`;
+  } else {
+    const agentSystemPrompt = subagentRow?.systemPrompt ?? "";
+    const subagentAllowedTools = subagentRow?.allowedTools ?? [];
+
+    const basePrompt = config.baseAgentPrompt + buildPromptSuffix(config.publicHostname);
+
+    // Only inject the plugin list if the agent has plugin-related tools in its
+    // whitelist. Injecting it for agents that cannot use plugins would be noise.
+    const hasPluginTools = subagentAllowedTools.includes("*") ||
+      subagentAllowedTools.includes("run_plugin_tool") ||
+      subagentAllowedTools.includes("manage_plugins");
+    const promptWithPlugins = pluginListSection !== undefined && hasPluginTools
+      ? `${basePrompt}\n\n${pluginListSection}`
+      : basePrompt;
+
+    systemPrompt = agentSystemPrompt.trim() !== ""
+      ? `${promptWithPlugins}\n\n${agentSystemPrompt}`
+      : promptWithPlugins;
   }
 
   agent.setSystemPrompt(systemPrompt);
@@ -970,9 +1140,24 @@ export async function handlePrompt(
     }
   }
 
-  const messageToSend = formatUserMessage(resolvedMessage ?? "", source, sender);
+  const messageToSend = formatUserMessage(resolvedMessage ?? "", source, senderLabel);
 
   console.log("[stavrobot] Sending message to agent:", messageToSend);
+
+  // Filter tools for subagents based on their allowed_tools list. The main
+  // agent always gets the full tool set. For subagents, we temporarily swap
+  // the tool list before the prompt and restore it after. The Agent class
+  // provides a public setTools() method for this purpose.
+  const fullTools = agent.state.tools;
+  if (!isMainAgent) {
+    const allowedTools = subagentRow?.allowedTools ?? [];
+    // A wildcard means all tools are allowed (should only be agent 1 in practice).
+    if (!allowedTools.includes("*")) {
+      const allowedSet = new Set([...allowedTools, "send_agent_message"]);
+      const filteredTools = fullTools.filter((tool) => allowedSet.has(tool.name));
+      agent.setTools(filteredTools);
+    }
+  }
 
   // The Pi agent loop's getApiKey callback runs inside an async context where thrown
   // errors become unhandled promise rejections that crash Node rather than propagating
@@ -980,6 +1165,10 @@ export async function handlePrompt(
   // loop, we ensure AuthError propagates cleanly to the queue's error handler. This does
   // not cover the rare case where a token expires mid-conversation between tool calls.
   await getApiKey(config);
+
+  // Track whether the first user message has been saved so we can attach sender
+  // metadata only to that message.
+  let firstUserMessageSaved = false;
 
   const unsubscribe = agent.subscribe((event) => {
     if (event.type === "message_end") {
@@ -995,7 +1184,15 @@ export async function handlePrompt(
         message.role === "assistant" ||
         message.role === "toolResult"
       ) {
-        savePromises.push(saveMessage(pool, message));
+        // Only the inbound user message carries sender metadata. Assistant and
+        // toolResult messages are produced by the agent itself and have no
+        // external sender.
+        if (message.role === "user" && !firstUserMessageSaved) {
+          firstUserMessageSaved = true;
+          savePromises.push(saveMessage(pool, message, agentId, senderIdentityId, senderAgentId));
+        } else {
+          savePromises.push(saveMessage(pool, message, agentId));
+        }
       }
     }
   });
@@ -1007,6 +1204,10 @@ export async function handlePrompt(
       await agent.prompt(messageToSend);
     }
   } finally {
+    // Restore the full tool list if it was filtered for a subagent.
+    if (!isMainAgent) {
+      agent.setTools(fullTools);
+    }
     unsubscribe();
     await Promise.all(savePromises);
   }
@@ -1047,7 +1248,7 @@ export async function handlePrompt(
     const currentMessages = agent.state.messages.slice();
 
     if (STAVROBOT_DEBUG) {
-      console.log(`[stavrobot] [compaction-debug] Compaction triggered: ${currentMessages.length} messages in memory`);
+      console.log(`[stavrobot] [debug] Compaction triggered: ${currentMessages.length} messages in memory`);
       for (let i = 0; i < currentMessages.length; i++) {
         const message = currentMessages[i];
         const textPreview = typeof message.content === "string"
@@ -1055,7 +1256,7 @@ export async function handlePrompt(
           : Array.isArray(message.content)
             ? message.content.filter((block): block is TextContent => block.type === "text").map((block) => block.text).join("").slice(0, 200)
             : "";
-        console.log(`[stavrobot] [compaction-debug]   [${i}] role=${message.role} text=${textPreview}`);
+        console.log(`[stavrobot] [debug]   [${i}] role=${message.role} text=${textPreview}`);
       }
     }
 
@@ -1081,15 +1282,15 @@ export async function handlePrompt(
         const messagesToKeep = currentMessages.slice(cutIndex);
 
         if (STAVROBOT_DEBUG) {
-          console.log(`[stavrobot] [compaction-debug] Cut point: index=${cutIndex}, compacting=${messagesToCompact.length}, keeping=${messagesToKeep.length}`);
-          console.log(`[stavrobot] [compaction-debug] Last compacted message: role=${messagesToCompact[messagesToCompact.length - 1].role}`);
-          console.log(`[stavrobot] [compaction-debug] First kept message: role=${messagesToKeep[0].role}`);
+          console.log(`[stavrobot] [debug] Cut point: index=${cutIndex}, compacting=${messagesToCompact.length}, keeping=${messagesToKeep.length}`);
+          console.log(`[stavrobot] [debug] Last compacted message: role=${messagesToCompact[messagesToCompact.length - 1].role}`);
+          console.log(`[stavrobot] [debug] First kept message: role=${messagesToKeep[0].role}`);
         }
 
         const serializedMessages = serializeMessagesForSummary(messagesToCompact);
 
         if (STAVROBOT_DEBUG) {
-          console.log(`[stavrobot] [compaction-debug] Serialized input for summarizer (${serializedMessages.length} chars):`);
+          console.log(`[stavrobot] [debug] Serialized input for summarizer (${serializedMessages.length} chars):`);
           console.log(serializedMessages);
         }
 
@@ -1123,20 +1324,22 @@ export async function handlePrompt(
           .join("");
 
         if (STAVROBOT_DEBUG) {
-          console.log(`[stavrobot] [compaction-debug] Summary output (${summaryText.length} chars):`);
+          console.log(`[stavrobot] [debug] Summary output (${summaryText.length} chars):`);
           console.log(summaryText);
         }
 
-        const previousCompaction = await loadLatestCompaction(pool);
+        const previousCompaction = await loadLatestCompaction(pool, agentId);
         const previousBoundary = previousCompaction ? previousCompaction.upToMessageId : 0;
 
         // The boundary must be the last compacted message id. loadMessages keeps
         // rows with id > upToMessageId, so using keepCount (not keepCount - 1)
-        // preserves exactly messagesToKeep.
+        // preserves exactly messagesToKeep. The query is scoped to this agent
+        // so the boundary is correct even when multiple agents share the same
+        // messages table.
         const keepCount = messagesToKeep.length;
         const cutoffResult = await pool.query(
-          `SELECT id FROM messages WHERE id > $1 ORDER BY id DESC LIMIT 1 OFFSET ${keepCount}`,
-          [previousBoundary]
+          `SELECT id FROM messages WHERE agent_id = $1 AND id > $2 ORDER BY id DESC LIMIT 1 OFFSET ${keepCount}`,
+          [agentId, previousBoundary],
         );
         if (cutoffResult.rows.length === 0) {
           console.warn("[stavrobot] Compaction skipped: no cutoff message found for computed boundary.");
@@ -1145,12 +1348,12 @@ export async function handlePrompt(
         const upToMessageId = cutoffResult.rows[0].id as number;
 
         if (STAVROBOT_DEBUG) {
-          console.log(`[stavrobot] [compaction-debug] Boundary: previousBoundary=${previousBoundary}, keepCount=${keepCount}, upToMessageId=${upToMessageId}`);
+          console.log(`[stavrobot] [debug] Boundary: previousBoundary=${previousBoundary}, keepCount=${keepCount}, upToMessageId=${upToMessageId}`);
         }
 
-        await saveCompaction(pool, summaryText, upToMessageId);
+        await saveCompaction(pool, summaryText, upToMessageId, agentId);
         console.log(`[stavrobot] Background compaction complete: compacted ${messagesToCompact.length} messages, kept ${messagesToKeep.length}.`);
-        compactionCompleted = true;
+        compactionCompletedForAgent = agentId;
       } catch (error) {
         console.error("[stavrobot] Background compaction failed:", error instanceof Error ? error.message : String(error));
       } finally {

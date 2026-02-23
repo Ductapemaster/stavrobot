@@ -12,18 +12,15 @@ import uuid
 
 
 def build_multipart_body(
-    filepath: str,
+    file_data: bytes,
+    filename: str,
     content_type: str,
 ) -> tuple[bytes, str]:
-    """Build a multipart/form-data request body for the given file.
+    """Build a multipart/form-data request body for the given file data.
 
     Returns a tuple of (body_bytes, boundary_string).
     """
     boundary = uuid.uuid4().hex
-    filename = os.path.basename(filepath)
-
-    with open(filepath, "rb") as file_handle:
-        file_data = file_handle.read()
 
     parts: list[bytes] = []
 
@@ -53,9 +50,14 @@ def build_multipart_body(
     return body, boundary
 
 
-def upload_file(url: str, filepath: str, password: str | None) -> None:
+def upload_file(
+    url: str,
+    filepath: str | None,
+    password: str | None,
+) -> None:
     """Upload a file to the given URL and print the server's response.
 
+    If filepath is None, reads from stdin as stdin.txt.
     Raises urllib.error.URLError or urllib.error.HTTPError on network/HTTP errors.
     Raises OSError if the file cannot be read.
     """
@@ -78,10 +80,18 @@ def upload_file(url: str, filepath: str, password: str | None) -> None:
             parsed.fragment,
         ))
 
-    guessed_type, _ = mimetypes.guess_type(filepath)
-    content_type = guessed_type if guessed_type is not None else "application/octet-stream"
+    if filepath is not None:
+        filename = os.path.basename(filepath)
+        guessed_type, _ = mimetypes.guess_type(filepath)
+        content_type = guessed_type if guessed_type is not None else "application/octet-stream"
+        with open(filepath, "rb") as file_handle:
+            file_data = file_handle.read()
+    else:
+        filename = "stdin.txt"
+        content_type = "text/plain"
+        file_data = sys.stdin.buffer.read()
 
-    body, boundary = build_multipart_body(filepath, content_type)
+    body, boundary = build_multipart_body(file_data, filename, content_type)
 
     request = urllib.request.Request(
         url,
@@ -105,7 +115,12 @@ def parse_args() -> argparse.Namespace:
         description="Upload a file to the stavrobot /api/upload endpoint."
     )
     parser.add_argument("url", help="Full URL of the upload endpoint.")
-    parser.add_argument("filepath", help="Path to the local file to upload.")
+    parser.add_argument(
+        "filepath",
+        nargs="?",
+        default=None,
+        help="Path to the local file to upload. If omitted, reads from stdin.",
+    )
     parser.add_argument(
         "--password",
         default=None,

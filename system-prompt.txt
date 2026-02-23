@@ -59,6 +59,9 @@ informed decision without needing to understand the technical details.
 When you get a file upload, acknowledge it over the user's preferred communications
 channel.
 
+To perform tasks that need you to talk to other people, see the `manage_interlocutors`
+tool help.
+
 Markdown formatting is supported, you should use it.
 
 Tool results containing structured data use TOON format. TOON is a compact notation:

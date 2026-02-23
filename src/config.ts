@@ -3,6 +3,7 @@ import TOML from "@iarna/toml";
 
 const SYSTEM_PROMPT_PATH = "system-prompt.txt";
 const COMPACTION_PROMPT_PATH = "compaction-prompt.txt";
+const AGENT_PROMPT_PATH = "agent-prompt.txt";
 
 export interface PostgresConfig {
   host: string;
@@ -40,9 +41,20 @@ export interface CoderConfig {
   model: string;
 }
 
+export interface SignalConfig {
+  account: string;
+  allowedNumbers: string[];
+}
+
 export interface TelegramConfig {
   botToken: string;
   allowedChatIds: number[];
+}
+
+export interface OwnerConfig {
+  name: string;
+  signal?: string;
+  telegram?: string;
 }
 
 export interface Config {
@@ -54,13 +66,26 @@ export interface Config {
   password?: string;
   baseSystemPrompt: string;
   compactionPrompt: string;
+  baseAgentPrompt: string;
   customPrompt?: string;
   tts?: TtsConfig;
   stt?: SttConfig;
   webSearch?: WebSearchConfig;
   webFetch?: WebFetchConfig;
   coder?: CoderConfig;
+  signal?: SignalConfig;
   telegram?: TelegramConfig;
+  owner: OwnerConfig;
+}
+
+export function isInAllowlist(config: Config, service: string, identifier: string): boolean {
+  if (service === "signal") {
+    return config.signal?.allowedNumbers.includes(identifier) ?? false;
+  }
+  if (service === "telegram") {
+    return config.telegram?.allowedChatIds.includes(Number(identifier)) ?? false;
+  }
+  return false;
 }
 
 export function loadConfig(): Config {
@@ -73,6 +98,9 @@ export function loadConfig(): Config {
 
   console.log(`[stavrobot] Loading compaction prompt from ${COMPACTION_PROMPT_PATH}`);
   config.compactionPrompt = fs.readFileSync(COMPACTION_PROMPT_PATH, "utf-8").trimEnd();
+
+  console.log(`[stavrobot] Loading agent prompt from ${AGENT_PROMPT_PATH}`);
+  config.baseAgentPrompt = fs.readFileSync(AGENT_PROMPT_PATH, "utf-8").trimEnd();
 
   if (config.apiKey === undefined && config.authFile === undefined) {
     throw new Error("Config must specify either apiKey or authFile.");
@@ -91,6 +119,13 @@ export function loadConfig(): Config {
   }
   if (config.publicHostname.endsWith("/")) {
     throw new Error("Config publicHostname must not end with a trailing slash.");
+  }
+
+  if (config.owner === undefined) {
+    throw new Error("Config must specify an [owner] section.");
+  }
+  if (typeof config.owner.name !== "string" || config.owner.name.trim() === "") {
+    throw new Error("Config [owner] section must specify a non-empty name.");
   }
 
   return config;

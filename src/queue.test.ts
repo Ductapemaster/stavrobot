@@ -3,6 +3,7 @@ import type pg from "pg";
 import type { Agent } from "@mariozechner/pi-agent-core";
 import type { Config } from "./config.js";
 import { AuthError } from "./auth.js";
+import type { RoutingResult } from "./queue.js";
 
 // Mock the modules that processQueue depends on so tests don't need real infrastructure.
 vi.mock("./agent.js", () => ({
@@ -14,11 +15,22 @@ vi.mock("./signal.js", () => ({
 vi.mock("./telegram-api.js", () => ({
   sendTelegramMessage: vi.fn(),
 }));
+vi.mock("./database.js", () => ({
+  getOwnerInterlocutorId: vi.fn().mockReturnValue(1),
+  getMainAgentId: vi.fn().mockReturnValue(1),
+  isOwnerIdentity: vi.fn().mockReturnValue(false),
+  resolveInterlocutor: vi.fn(),
+  loadAgent: vi.fn().mockResolvedValue(null),
+}));
 
 import { handlePrompt } from "./agent.js";
+import { getMainAgentId, isOwnerIdentity, resolveInterlocutor } from "./database.js";
 import { initializeQueue, enqueueMessage } from "./queue.js";
 
 const mockHandlePrompt = vi.mocked(handlePrompt);
+const mockGetMainAgentId = vi.mocked(getMainAgentId);
+const mockIsOwnerIdentity = vi.mocked(isOwnerIdentity);
+const mockResolveInterlocutor = vi.mocked(resolveInterlocutor);
 
 // Minimal stubs — the queue only passes these through to handlePrompt, which is mocked.
 const stubAgent = {} as unknown as Agent;
@@ -27,6 +39,9 @@ const stubConfig = { publicHostname: "http://localhost" } as unknown as Config;
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mockGetMainAgentId.mockReturnValue(1);
+  mockIsOwnerIdentity.mockReturnValue(false);
+  mockHandlePrompt.mockResolvedValue("");
   initializeQueue(stubAgent, stubPool, stubConfig);
 });
 
@@ -69,5 +84,127 @@ describe("processQueue non-retryable 400 error handling", () => {
 
     expect(result).toContain("Authentication required");
     expect(mockHandlePrompt).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("message routing", () => {
+  it("routes CLI messages (no source) to the owner conversation", async () => {
+    await enqueueMessage("hello");
+
+    expect(mockHandlePrompt).toHaveBeenCalledOnce();
+    const routingArg = mockHandlePrompt.mock.calls[0][4] as RoutingResult;
+    expect(routingArg.isMainAgent).toBe(true);
+    expect(routingArg.agentId).toBe(1);
+    expect(routingArg.senderLabel).toBe("owner");
+    // resolveInterlocutor should not be called for CLI messages.
+    expect(mockResolveInterlocutor).not.toHaveBeenCalled();
+  });
+
+  it("routes cron messages to the owner conversation", async () => {
+    await enqueueMessage("reminder", "cron", undefined);
+
+    expect(mockHandlePrompt).toHaveBeenCalledOnce();
+    const routingArg = mockHandlePrompt.mock.calls[0][4] as RoutingResult;
+    expect(routingArg.isMainAgent).toBe(true);
+    expect(routingArg.senderLabel).toBe("cron");
+    expect(mockResolveInterlocutor).not.toHaveBeenCalled();
+  });
+
+  it("routes coder messages to the owner conversation", async () => {
+    await enqueueMessage("task done", "coder", undefined);
+
+    expect(mockHandlePrompt).toHaveBeenCalledOnce();
+    const routingArg = mockHandlePrompt.mock.calls[0][4] as RoutingResult;
+    expect(routingArg.isMainAgent).toBe(true);
+    expect(routingArg.senderLabel).toBe("coder");
+    expect(mockResolveInterlocutor).not.toHaveBeenCalled();
+  });
+
+  it("routes plugin:* messages to the owner conversation", async () => {
+    await enqueueMessage("result", "plugin:myplugin", undefined);
+
+    expect(mockHandlePrompt).toHaveBeenCalledOnce();
+    const routingArg = mockHandlePrompt.mock.calls[0][4] as RoutingResult;
+    expect(routingArg.isMainAgent).toBe(true);
+    expect(routingArg.senderLabel).toBe("plugin:myplugin");
+    expect(mockResolveInterlocutor).not.toHaveBeenCalled();
+  });
+
+  it("routes owner identity messages to the owner conversation without a DB lookup", async () => {
+    mockIsOwnerIdentity.mockReturnValue(true);
+
+    await enqueueMessage("hello", "signal", "+1234567890");
+
+    expect(mockHandlePrompt).toHaveBeenCalledOnce();
+    const routingArg = mockHandlePrompt.mock.calls[0][4] as RoutingResult;
+    expect(routingArg.isMainAgent).toBe(true);
+    expect(routingArg.senderLabel).toBe("owner");
+    expect(mockResolveInterlocutor).not.toHaveBeenCalled();
+  });
+
+  it("resolves non-owner messages via the interlocutor_identities table", async () => {
+    mockResolveInterlocutor.mockResolvedValue({
+      interlocutorId: 42,
+      identityId: 10,
+      agentId: 5,
+      isOwner: false,
+      displayName: "Alice",
+    });
+
+    await enqueueMessage("hi", "signal", "+9876543210");
+
+    expect(mockResolveInterlocutor).toHaveBeenCalledWith(stubPool, "signal", "+9876543210");
+    expect(mockHandlePrompt).toHaveBeenCalledOnce();
+    const routingArg = mockHandlePrompt.mock.calls[0][4] as RoutingResult;
+    expect(routingArg.agentId).toBe(5);
+    expect(routingArg.isMainAgent).toBe(false);
+    expect(routingArg.senderLabel).toBe("Alice");
+    expect(routingArg.senderIdentityId).toBe(10);
+  });
+
+  it("drops messages from unknown interlocutors and resolves with empty string", async () => {
+    mockResolveInterlocutor.mockResolvedValue(null);
+
+    const result = await enqueueMessage("hi", "signal", "+0000000000");
+
+    expect(result).toBe("");
+    expect(mockHandlePrompt).not.toHaveBeenCalled();
+  });
+
+  it("drops a non-internal message that has a source but no sender", async () => {
+    const result = await enqueueMessage("hi", "signal", undefined);
+
+    expect(result).toBe("");
+    expect(mockHandlePrompt).not.toHaveBeenCalled();
+    expect(mockResolveInterlocutor).not.toHaveBeenCalled();
+  });
+
+  it("drops a message that has a sender but no source", async () => {
+    const result = await enqueueMessage("hi", undefined, "+1234567890");
+
+    expect(result).toBe("");
+    expect(mockHandlePrompt).not.toHaveBeenCalled();
+    expect(mockResolveInterlocutor).not.toHaveBeenCalled();
+  });
+
+  it("routes agent-to-agent messages to the target agent", async () => {
+    mockResolveInterlocutor.mockResolvedValue(null);
+
+    await enqueueMessage("hello from agent 1", "agent", "1", undefined, undefined, undefined, 2);
+
+    expect(mockHandlePrompt).toHaveBeenCalledOnce();
+    const routingArg = mockHandlePrompt.mock.calls[0][4] as RoutingResult;
+    expect(routingArg.agentId).toBe(2);
+    expect(routingArg.isMainAgent).toBe(false);
+    expect(routingArg.senderAgentId).toBe(1);
+    // resolveInterlocutor should not be called for agent-to-agent messages.
+    expect(mockResolveInterlocutor).not.toHaveBeenCalled();
+  });
+
+  it("drops agent-to-agent messages when targetAgentId is not set", async () => {
+    const result = await enqueueMessage("hello", "agent", "1");
+
+    expect(result).toBe("");
+    expect(mockHandlePrompt).not.toHaveBeenCalled();
   });
 });

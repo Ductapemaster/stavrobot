@@ -4,7 +4,7 @@ This document describes the architecture of Stavrobot, a single-user personal AI
 
 ## System overview
 
-Stavrobot is an LLM-powered personal assistant that runs as a set of Docker containers. The user interacts with it via a CLI client, Signal, or Telegram. The LLM agent (Anthropic Claude) has access to a PostgreSQL database, a plugin system, sandboxed Python execution, web search/fetch, cron scheduling, text-to-speech, speech-to-text, and a self-programming subsystem that can create new tools at runtime.
+Stavrobot is an LLM-powered personal assistant that runs as a set of Docker containers. The owner interacts with it via a CLI client, Signal, or Telegram. The main agent can create subagents, each with their own conversation history, system prompt, and tool whitelist. Interlocutors are contact records that can be assigned to agents for inbound message routing. The LLM agent (Anthropic Claude) has access to a PostgreSQL database, a plugin system, sandboxed Python execution, web search/fetch, cron scheduling, text-to-speech, speech-to-text, and a self-programming subsystem that can create new tools at runtime.
 
 All messages flow through a single `POST /chat` endpoint on the main app. The agent processes one message at a time via an in-memory queue.
 
@@ -86,6 +86,14 @@ All messages enter through `POST /chat` (either the external port 3000 with auth
 
 At least one of `message`, `audio`, `attachments`, or `files` must be present.
 
+**Routing:** After the request is accepted, the queue resolves which agent the message belongs to:
+
+1. **Internal sources** (`cli`, `cron`, `coder`, `plugin:*`, or no source/sender): always routed to the main agent (agent 1) without any DB lookup.
+2. **Agent-to-agent messages** (`source: "agent"`): routed to the agent ID specified in `targetAgentId`. The `sender` field carries the sending agent's ID.
+3. **Owner check:** If `(source, sender)` matches one of the owner's configured identities (loaded into memory at startup from `[owner]` config), the message is routed to the main agent. This is a pure in-memory check — no DB involved.
+4. **Soft gate:** Look up `(source, sender)` in `interlocutor_identities`. If found, resolve the interlocutor's `agent_id` and route to that agent. If the interlocutor has no assigned agent, the message is dropped silently.
+5. If no routing rule matches, the message is dropped silently — no error is returned to the caller.
+
 ### Message queue
 
 Messages are processed sequentially through an in-memory queue (`queue.ts`). Only one message is processed at a time. The queue handles retries (up to 3 retries with 30-second delays) and special error handling for auth failures (sends login links via the originating channel) and 400 errors (non-retryable).
@@ -94,16 +102,19 @@ Messages are processed sequentially through an in-memory queue (`queue.ts`). Onl
 
 `handlePrompt()` in `agent.ts` is the core processing function:
 
-1. If a background compaction just completed, reloads messages from the database.
-2. Loads all memories and scratchpad titles from the database.
-3. Builds the system prompt: base prompt + custom prompt + public hostname/timezone suffix + plugin list + memories + scratchpad titles.
-4. Transcribes audio via OpenAI STT if present.
-5. Reads image attachments into base64 for vision.
-6. Formats the user message with metadata: `Time`, `Source`, `Sender`, `Text`.
-7. Validates API key/OAuth credentials before entering the agent loop.
-8. Subscribes to agent events to persist messages to the database as they complete.
-9. Calls `agent.prompt()` which runs the LLM with tool use in a loop until the agent stops.
-10. After completion, triggers background compaction if message count exceeds 40.
+1. Loads the conversation messages for the resolved agent from the database and swaps them into the agent via `replaceMessages()`. This is a cheap array swap that ensures the agent always has the right history regardless of which agent received the previous message.
+2. If a background compaction just finished for this agent, clears the compaction flag (the reload above already picks up the compacted state).
+3. Builds the system prompt, which differs by agent type:
+   - **Main agent:** base prompt (`system-prompt.txt`) + custom prompt (from config) + public hostname/timezone suffix + plugin list + memories (full content) + scratchpad titles.
+   - **Subagent:** base subagent prompt (`agent-prompt.txt`) + public hostname/timezone suffix + plugin list (only if the agent's tool whitelist includes plugin tools) + the agent's `system_prompt` field from the database.
+4. Filters the tool list for subagents based on their `allowed_tools` whitelist. `send_agent_message` is always included regardless of the whitelist. The main agent always gets the full tool set.
+5. Transcribes audio via OpenAI STT if present.
+6. Reads image attachments into base64 for vision.
+7. Formats the user message with metadata: `Time`, `Source`, `Sender`, `Text`. The sender label is `"owner"` for the owner and the interlocutor's `display_name` for external senders.
+8. Validates API key/OAuth credentials before entering the agent loop.
+9. Subscribes to agent events to persist messages to the database (scoped to the agent, with `sender_identity_id` or `sender_agent_id` on the inbound user message) as they complete.
+10. Calls `agent.prompt()` which runs the LLM with tool use in a loop until the agent stops.
+11. After completion, triggers background compaction if message count exceeds 50.
 
 ### Outbound message delivery
 
@@ -147,18 +158,23 @@ All tables are created with `CREATE TABLE IF NOT EXISTS` on startup. The schema 
 
 ### messages
 
-Stores the full conversation history. Each row is a single agent message (user, assistant, or toolResult) serialized as JSONB.
+Stores the full conversation history. Each row is a single agent message (user, assistant, or toolResult) serialized as JSONB. Scoped to an agent.
 
 | Column | Type | Description |
 |--------|------|-------------|
 | id | SERIAL PRIMARY KEY | Auto-incrementing ID |
 | role | TEXT | Message role |
 | content | JSONB | Full message content |
+| agent_id | INTEGER FK | Agent this message belongs to |
+| sender_identity_id | INTEGER FK (nullable) | Identity of the external sender (set on inbound user messages from interlocutors) |
+| sender_agent_id | INTEGER FK (nullable) | ID of the sending agent (set on inbound user messages from other agents) |
 | created_at | TIMESTAMPTZ | Timestamp |
+
+A CHECK constraint (`messages_at_most_one_sender`) enforces that at most one of `sender_identity_id` and `sender_agent_id` is non-null per row.
 
 ### memories
 
-The agent's self-managed memory store. Full content is injected into the system prompt every turn.
+The agent's self-managed memory store. Full content is injected into the system prompt every turn (owner conversations only).
 
 | Column | Type | Description |
 |--------|------|-------------|
@@ -169,7 +185,7 @@ The agent's self-managed memory store. Full content is injected into the system 
 
 ### scratchpad
 
-Second-tier knowledge store. Only titles are injected into the system prompt; bodies are read on demand via SQL.
+Second-tier knowledge store. Only titles are injected into the system prompt; bodies are read on demand via SQL. Owner conversations only.
 
 | Column | Type | Description |
 |--------|------|-------------|
@@ -181,14 +197,58 @@ Second-tier knowledge store. Only titles are injected into the system prompt; bo
 
 ### compactions
 
-Stores conversation summaries created by background compaction.
+Stores conversation summaries created by background compaction. Scoped to an agent.
 
 | Column | Type | Description |
 |--------|------|-------------|
 | id | SERIAL PRIMARY KEY | Auto-incrementing ID |
 | summary | TEXT | Compacted conversation summary |
 | up_to_message_id | INTEGER FK | Last message ID included in this compaction |
+| agent_id | INTEGER FK | Agent this compaction belongs to |
 | created_at | TIMESTAMPTZ | Timestamp |
+
+### agents
+
+Agents that can receive and process messages. Agent 1 is always the main agent; all other rows are subagents created by the main agent.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| id | SERIAL PRIMARY KEY | Auto-incrementing ID. Agent 1 is always the main agent |
+| name | TEXT | Short descriptive name |
+| system_prompt | TEXT | Subagent instructions. Empty for the main agent, whose prompt is built at runtime from files |
+| allowed_tools | TEXT[] | Tool whitelist. `["*"]` = all tools (main agent), `[]` = no tools, explicit list = only those tools |
+| created_at | TIMESTAMPTZ | Timestamp |
+
+The main agent row is upserted on every startup with `id = 1`, `name = "main"`, and `allowed_tools = ["*"]`.
+
+### interlocutors
+
+Contact records for everyone the bot can talk to, including the owner. Each row has a display name, an `owner` flag, an `enabled` flag, and a reference to the agent that handles their messages.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| id | SERIAL PRIMARY KEY | Auto-incrementing ID |
+| display_name | TEXT UNIQUE | Human-readable name used in send tools |
+| owner | BOOLEAN | True for the owner row; enforced unique by a partial index |
+| enabled | BOOLEAN | When false, inbound messages are dropped and outbound sends are rejected |
+| agent_id | INTEGER FK (nullable) | Agent that handles messages from this interlocutor. If null, messages are dropped |
+| created_at | TIMESTAMPTZ | Timestamp |
+
+A partial unique index (`one_owner`) on `(owner) WHERE owner = true` ensures at most one row can be the owner. The owner row is upserted from `[owner]` config on every startup with `agent_id = 1` (main agent).
+
+### interlocutor_identities
+
+Channel identities for each interlocutor. One interlocutor can have multiple identities (e.g., both Signal and Telegram).
+
+| Column | Type | Description |
+|--------|------|-------------|
+| id | SERIAL PRIMARY KEY | Auto-incrementing ID |
+| interlocutor_id | INTEGER FK | References interlocutors(id) ON DELETE CASCADE |
+| service | TEXT | Channel name matching the `source` field on requests (`"signal"`, `"telegram"`) |
+| identifier | TEXT (nullable) | Channel-native ID (phone number for Signal, chat ID for Telegram). Null indicates a soft-deleted identity |
+| created_at | TIMESTAMPTZ | Timestamp |
+
+A partial unique index on `(service, identifier) WHERE identifier IS NOT NULL` prevents the same active channel identity from being assigned to multiple interlocutors. Soft-deleted rows (identifier IS NULL) are excluded from the index so multiple soft-deleted rows per service are allowed.
 
 ### cron_entries
 
@@ -224,7 +284,10 @@ The agent has access to these tools, conditionally enabled based on configuratio
 **Always available:**
 - `execute_sql` — Run arbitrary SQL against PostgreSQL.
 - `manage_knowledge` — Upsert/delete entries in the memory or scratchpad stores.
-- `send_signal_message` — Send text or attachments via Signal.
+- `manage_interlocutors` — Create, update, delete, and list interlocutor contact records and their channel identities.
+- `manage_agents` — Create, update, delete, and list subagents.
+- `send_agent_message` — Send a message to another agent via the queue. Always available to all agents, including subagents, regardless of their tool whitelist.
+- `send_signal_message` — Send text or attachments via Signal. Accepts display names as recipients.
 - `manage_cron` — Create, update, delete, or list scheduled cron entries.
 - `run_python` — Execute Python code in the sandboxed python-runner.
 - `manage_pages` — Create, update, or delete web pages with optional named queries.
@@ -233,26 +296,30 @@ The agent has access to these tools, conditionally enabled based on configuratio
 - `manage_plugins` — Install, update, remove, configure, list, or show plugins.
 - `run_plugin_tool` — Execute a plugin tool.
 
+Subagents only see the tools in their `allowed_tools` whitelist plus `send_agent_message`. The main agent always sees the full tool set.
+
 **Conditionally available:**
 - `web_search` — Search the web via Anthropic's server-side web search tool (requires `[webSearch]` config).
 - `web_fetch` — Fetch a URL and process its content with an LLM (requires `[webFetch]` config).
 - `text_to_speech` — Convert text to speech via OpenAI TTS API (requires `[tts]` config).
-- `send_telegram_message` — Send text or attachments via Telegram (requires `[telegram]` config).
+- `send_telegram_message` — Send text or attachments via Telegram. Accepts display names as recipients (requires `[telegram]` config).
 - `request_coding_task` — Send coding tasks to the coder agent (requires `[coder]` config).
 
 Action-based tools (`manage_knowledge`, `manage_cron`, `manage_files`, `manage_pages`, `manage_uploads`, `manage_plugins`) support a `help` action that returns detailed documentation.
 
+Send tools (`send_signal_message`, `send_telegram_message`) resolve display names to channel identifiers via the `interlocutors` and `interlocutor_identities` tables. Both the soft gate (interlocutor must exist in the DB) and the hard gate (identifier must be in the config allowlist) are enforced on outbound sends.
+
 ## Conversation compaction
 
-When the in-memory message count exceeds 40, a background compaction is triggered:
+When the in-memory message count exceeds 50, a background compaction is triggered:
 
 1. Finds a safe cut point at a user message boundary (to avoid orphaning tool-result messages).
 2. Serializes the older messages into a text summary.
 3. Calls the LLM (same model) to produce a concise summary.
-4. Saves the summary to the `compactions` table with the boundary message ID.
+4. Saves the summary to the `compactions` table with the boundary message ID and the agent ID.
 5. On the next prompt, reloads messages from the database: a synthetic user message with the summary, followed by the messages after the boundary.
 
-A boolean flag prevents concurrent compaction runs. The compaction runs in a fire-and-forget async block.
+Compaction is per-agent: each agent's conversation compacts independently. A boolean flag prevents concurrent compaction runs. The compaction runs in a fire-and-forget async block.
 
 ## Plugin system
 
@@ -340,6 +407,30 @@ The LLM agent can write config via `configure_plugin` but can never read config 
 - Upload file paths are validated to be within the uploads directory.
 - Telegram chat IDs and Signal phone numbers are checked against allowlists.
 
+### Two-layer access control for interlocutors
+
+Inbound and outbound messages to non-owner interlocutors are subject to two independent gates:
+
+- **Hard gate (config allowlist):** The `[signal].allowedNumbers` and `[telegram].allowedChatIds` lists in `config.toml`. This is the safety boundary the bot cannot override — it is only changed by editing the config file and restarting.
+- **Soft gate (interlocutor_identities table):** The bot-managed directory of known senders. The bot can add or remove entries via `manage_interlocutors`, but only within the hard gate boundary. The soft gate resolves to an `agent_id` via the interlocutor's `agent_id` column. If no agent is assigned, the message is dropped.
+
+Both gates apply in both directions:
+- **Inbound:** A message must first pass the config allowlist (enforced by the signal-bridge and Telegram webhook handler), then match an entry in `interlocutor_identities`. If either check fails, the message is dropped silently.
+- **Outbound:** When a send tool resolves a recipient, the resolved identifier must be in `interlocutor_identities` and in the config allowlist. If either check fails, the tool returns an error.
+
+### Owner identity
+
+The owner's identity is defined in the `[owner]` config section and loaded into memory at startup (`isOwnerIdentity()` / `getOwnerInterlocutorId()`). The in-memory owner ID is the sole authoritative check for routing — it cannot be changed by the bot or via the database at runtime. The `owner = true` column in the `interlocutors` table is used only for upsert logic on startup and to enforce the one-owner constraint at the DB level.
+
+### Subagent prompt security
+
+The subagent base prompt (`agent-prompt.txt`) is deny-all by default. Each subagent's permissions are controlled by two mechanisms:
+
+- **Tool whitelist (`allowed_tools`):** Restricts which tools the subagent can call. The main agent sets this when creating the subagent.
+- **System prompt (`system_prompt`):** Appended to the base prompt. The main agent controls what information and capabilities each subagent has access to.
+
+The main agent is the sole authority over what each subagent can do. Subagents cannot modify their own configuration.
+
 ## Configuration
 
 Runtime configuration is loaded from `config.toml` (or the path in `CONFIG_PATH` env var). The file is gitignored; `config.example.toml` is the template.
@@ -350,11 +441,20 @@ Runtime configuration is loaded from `config.toml` (or the path in `CONFIG_PATH`
 - `model` — Model name.
 - `publicHostname` — Public HTTPS URL (no trailing slash).
 - Either `apiKey` or `authFile` (mutually exclusive).
+- `[owner]` — Owner identity section (required).
+
+### `[owner]` section
+
+Defines the owner's identity. Used on startup to upsert the owner interlocutor record (with `agent_id = 1`, the main agent) and seed their channel identities into `interlocutor_identities`.
+
+- `name` (required) — Display name for the owner.
+- `signal` (optional) — Owner's Signal phone number in international format.
+- `telegram` (optional) — Owner's Telegram chat ID.
 
 ### Optional fields
 
 - `password` — HTTP Basic Auth password for all endpoints.
-- `customPrompt` — Additional instructions appended to the base system prompt.
+- `customPrompt` — Additional instructions appended to the base system prompt (owner conversations only).
 - `[tts]` — Text-to-speech (OpenAI API).
 - `[stt]` — Speech-to-text (OpenAI API).
 - `[webSearch]` — Web search sub-agent.
@@ -367,27 +467,30 @@ Runtime configuration is loaded from `config.toml` (or the path in `CONFIG_PATH`
 
 ```
 src/
-  index.ts          — HTTP server, routing, entry point. Two servers: external (3000) and internal (3001).
-  config.ts         — Loads config.toml and Postgres config from environment.
-  database.ts       — PostgreSQL connection, schema initialization, CRUD for all tables.
-  agent.ts          — Agent creation, tool definitions, prompt handling, compaction.
-  queue.ts          — Sequential message processing queue with retry logic.
-  scheduler.ts      — Cron scheduler that fires entries and cleans up old uploads.
-  auth.ts           — API key resolution and OAuth token refresh.
-  login.ts          — OAuth PKCE login flow web UI.
-  telegram.ts       — Telegram webhook handling and markdown-to-HTML conversion.
-  telegram-api.ts   — Low-level Telegram sendMessage API call.
-  signal.ts         — Low-level Signal bridge send call.
-  plugins.ts        — Plugin management web UI and proxy endpoints.
-  plugin-tools.ts   — Agent tools for plugin management and execution.
-  python.ts         — Agent tool for sandboxed Python execution.
-  web-search.ts     — Agent tool for web search via Anthropic API.
-  web-fetch.ts      — Agent tool for URL fetching and LLM analysis.
-  stt.ts            — Speech-to-text via OpenAI API with audio format conversion.
-  pages.ts          — Agent tool for page management.
-  uploads.ts        — File upload handling and storage.
-  upload-tools.ts   — Agent tool for upload management.
-  explorer.ts       — Database explorer web UI and API.
+  index.ts              — HTTP server, routing, entry point. Two servers: external (3000) and internal (3001).
+  config.ts             — Loads config.toml and Postgres config from environment. Defines OwnerConfig, isInAllowlist.
+  database.ts           — PostgreSQL connection, schema initialization, CRUD for all tables. Owns agent and owner seeding, interlocutor and agent resolution.
+  agent.ts              — Agent creation, tool definitions, prompt handling, compaction.
+  queue.ts              — Sequential message processing queue with retry logic and agent routing.
+  interlocutors.ts      — manage_interlocutors tool implementation (contact records and channel identities).
+  agents.ts             — manage_agents tool implementation (create, update, delete, list subagents).
+  send-agent-message.ts — send_agent_message tool implementation (agent-to-agent messaging via the queue).
+  scheduler.ts          — Cron scheduler that fires entries and cleans up old uploads.
+  auth.ts               — API key resolution and OAuth token refresh.
+  login.ts              — OAuth PKCE login flow web UI.
+  telegram.ts           — Telegram webhook handling and markdown-to-HTML conversion.
+  telegram-api.ts       — Low-level Telegram sendMessage API call.
+  signal.ts             — Low-level Signal bridge send call.
+  plugins.ts            — Plugin management web UI and proxy endpoints.
+  plugin-tools.ts       — Agent tools for plugin management and execution.
+  python.ts             — Agent tool for sandboxed Python execution.
+  web-search.ts         — Agent tool for web search via Anthropic API.
+  web-fetch.ts          — Agent tool for URL fetching and LLM analysis.
+  stt.ts                — Speech-to-text via OpenAI API with audio format conversion.
+  pages.ts              — Agent tool for page management.
+  uploads.ts            — File upload handling and storage.
+  upload-tools.ts       — Agent tool for upload management.
+  explorer.ts           — Database explorer web UI and API.
 
 plugin-runner/
   src/index.ts      — Plugin runner server (manages, executes plugins).
@@ -413,7 +516,8 @@ scripts/
   pg-backup.sh      — Database backup with retention policy.
 
 client.py           — Python CLI client (standalone, no dependencies).
-system-prompt.txt   — Base system prompt for the main agent.
+system-prompt.txt   — Base system prompt for the main agent (owner conversations).
+agent-prompt.txt    — Base system prompt for subagents (deny-all by default).
 config.example.toml — Configuration template.
 entrypoint.sh       — App container entrypoint.
 ```

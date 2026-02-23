@@ -26,6 +26,14 @@ normal dashes rather than en- or em-dashes. Don't end messages with a full stop,
 too formal.
 """
 
+# The owner of this bot. Used to seed the owner interlocutor record on startup.
+# name is required. signal and telegram are optional — include whichever channels
+# the owner uses.
+[owner]
+name = "Stavros"
+# signal = "+1234567890"
+# telegram = "123456789"
+
 # Signal integration. account is the phone number registered with signal-cli.
 # allowedNumbers is the allowlist of numbers permitted to message the agent.
 [signal]

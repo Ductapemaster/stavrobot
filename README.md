@@ -12,6 +12,7 @@ A personal AI assistant with persistent memory, sandboxed code execution, and Si
 - **Signal integration.** Two-way messaging via signal-cli, including voice note transcription (OpenAI STT).
 - **Telegram integration.** Two-way messaging via a Telegram bot webhook, including voice note transcription (OpenAI STT).
 - **Three-tier knowledge.** Tier 1 (memories): a self-managed memory store injected into the system prompt every turn — for things the agent needs constantly. Tier 2 (scratchpad): titled entries whose titles are always in context but whose bodies are loaded on demand — for important but less-frequently needed knowledge. Tier 3 (database): full read/write access to PostgreSQL via unrestricted SQL — the agent can create tables, query, and store anything.
+- **Subagents.** The main agent can create subagents with their own conversation context, system prompt, and restricted tool access. Useful for talking to outside people to complete tasks or arrange things, while having a buffer between the outside person and the main agent.
 - **Self-programming.** The agent can request a secondary coding agent to create new tools at runtime. Tools are executable scripts with a JSON manifest, discovered and invoked by the main agent.
 - **Sandboxed Python execution.** Arbitrary Python with pip dependencies via `uv`, isolated from the host environment.
 - **Cron scheduling.** The agent can schedule its own recurring or one-shot reminders.
@@ -144,7 +145,7 @@ See [PLUGIN.md](coder/PLUGIN.md) for everything you need to know to create a Sta
 
 ## Architecture
 
-Four Docker containers: `app` (TypeScript server, exposes `POST /chat` on port 3000 and handles Telegram webhooks at `POST /telegram/webhook`), `postgres` (PostgreSQL 17 for persistent state), `plugin-runner` (Node.js server — lists, inspects, and executes plugins, both locally created and git-installed), and `coder` (Claude Code headless agent for creating and modifying editable plugins).
+Four Docker containers: `app` (TypeScript server, exposes `POST /chat` on port 3000 and handles Telegram webhooks at `POST /telegram/webhook`), `postgres` (PostgreSQL 17 for persistent state), `plugin-runner` (Node.js server — lists, inspects, and executes plugins, both locally created and git-installed), and `coder` (Claude Code headless agent for creating and modifying editable plugins). The main agent can create subagents, each with their own conversation history, system prompt, and tool whitelist. Interlocutors are contact records assigned to agents for inbound message routing.
 
 ## License
 

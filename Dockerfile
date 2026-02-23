@@ -12,7 +12,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends faad lame && rm
 COPY --from=build /app/package.json /app/package-lock.json* ./
 RUN npm install --omit=dev
 COPY --from=build /app/dist/ ./dist/
-COPY system-prompt.txt compaction-prompt.txt ./
+COPY system-prompt.txt compaction-prompt.txt agent-prompt.txt ./
 COPY entrypoint.sh ./
 EXPOSE 3000
 ENTRYPOINT ["./entrypoint.sh"]

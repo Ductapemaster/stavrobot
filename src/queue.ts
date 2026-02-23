@@ -6,9 +6,18 @@ import { AuthError } from "./auth.js";
 import { sendSignalMessage } from "./signal.js";
 import { sendTelegramMessage } from "./telegram-api.js";
 import type { FileAttachment } from "./uploads.js";
+import { getMainAgentId, isOwnerIdentity, resolveInterlocutor, loadAgent } from "./database.js";
 
 const MAX_RETRIES = 3;
 const RETRY_DELAY_MS = 30_000;
+
+export interface RoutingResult {
+  agentId: number;
+  senderIdentityId: number | undefined;
+  senderAgentId: number | undefined;
+  senderLabel: string;
+  isMainAgent: boolean;
+}
 
 interface QueueEntry {
   message: string | undefined;
@@ -17,6 +26,7 @@ interface QueueEntry {
   audio: string | undefined;
   audioContentType: string | undefined;
   attachments: FileAttachment[] | undefined;
+  targetAgentId: number | undefined;
   retries: number;
   resolve: (value: string) => void;
   reject: (reason: unknown) => void;
@@ -39,12 +49,122 @@ function sleep(milliseconds: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
+// Internal sources are system-generated (not from external interlocutors) and
+// always route to the owner conversation.
+function isInternalSource(source: string): boolean {
+  return source === "cli" || source === "cron" || source === "coder" || source.startsWith("plugin:");
+}
+
+async function resolveTargetAgent(
+  pool: pg.Pool,
+  source: string | undefined,
+  sender: string | undefined,
+  targetAgentId: number | undefined,
+): Promise<RoutingResult | null> {
+  const mainAgentId = getMainAgentId();
+
+  // Agent-to-agent message: targetAgentId must be set.
+  if (source === "agent") {
+    if (targetAgentId === undefined) {
+      return null;
+    }
+    const senderAgentId = sender !== undefined ? Number(sender) : undefined;
+    let senderLabel = "agent";
+    if (senderAgentId !== undefined) {
+      const senderAgent = await loadAgent(pool, senderAgentId);
+      if (senderAgent !== null) {
+        senderLabel = `${senderAgent.name} (ID: ${senderAgentId})`;
+      }
+    }
+    return {
+      agentId: targetAgentId,
+      senderIdentityId: undefined,
+      senderAgentId,
+      senderLabel,
+      isMainAgent: targetAgentId === mainAgentId,
+    };
+  }
+
+  // If targetAgentId is set on a non-agent source, use it directly.
+  if (targetAgentId !== undefined) {
+    return {
+      agentId: targetAgentId,
+      senderIdentityId: undefined,
+      senderAgentId: undefined,
+      senderLabel: source ?? "unknown",
+      isMainAgent: targetAgentId === mainAgentId,
+    };
+  }
+
+  // Pure CLI call: no source and no sender. Route to main agent.
+  if (source === undefined && sender === undefined) {
+    return {
+      agentId: mainAgentId,
+      senderIdentityId: undefined,
+      senderAgentId: undefined,
+      senderLabel: "owner",
+      isMainAgent: true,
+    };
+  }
+
+  // Named internal sources (cli, cron, coder, plugin:*) always go to main agent.
+  if (source !== undefined && isInternalSource(source)) {
+    return {
+      agentId: mainAgentId,
+      senderIdentityId: undefined,
+      senderAgentId: undefined,
+      senderLabel: source,
+      isMainAgent: true,
+    };
+  }
+
+  // External messages require both source and sender. Drop if either is missing.
+  if (source === undefined || sender === undefined) {
+    return null;
+  }
+
+  // If the sender matches the owner's configured identities, route to main agent
+  // without a DB lookup.
+  if (isOwnerIdentity(source, sender)) {
+    return {
+      agentId: mainAgentId,
+      senderIdentityId: undefined,
+      senderAgentId: undefined,
+      senderLabel: "owner",
+      isMainAgent: true,
+    };
+  }
+
+  // Look up the sender in the interlocutor_identities table (soft gate).
+  const interlocutor = await resolveInterlocutor(pool, source, sender);
+  if (interlocutor === null) {
+    return null;
+  }
+  return {
+    agentId: interlocutor.agentId,
+    senderIdentityId: interlocutor.identityId,
+    senderAgentId: undefined,
+    senderLabel: interlocutor.displayName,
+    isMainAgent: interlocutor.agentId === mainAgentId,
+  };
+}
+
 async function processQueue(): Promise<void> {
   processing = true;
   while (queue.length > 0) {
     const entry = queue.shift()!;
+    if (process.env.STAVROBOT_DEBUG === "1") {
+      const preview = (entry.message ?? "").slice(0, 200);
+      console.log(`[stavrobot] [debug] Received: ${entry.source} - ${entry.sender} - ${preview}`);
+    }
     try {
-      const response = await handlePrompt(queueAgent!, queuePool!, entry.message, queueConfig!, entry.source, entry.sender, entry.audio, entry.audioContentType, entry.attachments);
+      const routing = await resolveTargetAgent(queuePool!, entry.source, entry.sender, entry.targetAgentId);
+      if (routing === null) {
+        console.warn(`[stavrobot] Dropping message: could not resolve target agent. source=${entry.source}, sender=${entry.sender}`);
+        entry.resolve("");
+        continue;
+      }
+      const response = await handlePrompt(queueAgent!, queuePool!, entry.message, queueConfig!, routing, entry.source, entry.audio, entry.audioContentType, entry.attachments);
       entry.resolve(response);
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
@@ -82,9 +202,17 @@ async function processQueue(): Promise<void> {
   processing = false;
 }
 
-export function enqueueMessage(message: string | undefined, source?: string, sender?: string, audio?: string, audioContentType?: string, attachments?: FileAttachment[]): Promise<string> {
+export function enqueueMessage(
+  message: string | undefined,
+  source?: string,
+  sender?: string,
+  audio?: string,
+  audioContentType?: string,
+  attachments?: FileAttachment[],
+  targetAgentId?: number,
+): Promise<string> {
   return new Promise<string>((resolve, reject) => {
-    queue.push({ message, source, sender, audio, audioContentType, attachments, retries: 0, resolve, reject });
+    queue.push({ message, source, sender, audio, audioContentType, attachments, targetAgentId, retries: 0, resolve, reject });
     if (!processing) {
       void processQueue();
     }

@@ -2,6 +2,7 @@ import pg from "pg";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { loadPostgresConfig } from "./config.js";
 import { encodeToToon } from "./toon.js";
+import type { OwnerConfig } from "./config.js";
 
 export async function connectDatabase(): Promise<pg.Pool> {
   const config = loadPostgresConfig();
@@ -52,6 +53,303 @@ export async function initializeCompactionsSchema(pool: pg.Pool): Promise<void> 
   `);
 }
 
+// Set by seedOwner() on startup. Null until seeding completes.
+let ownerInterlocutorId: number | null = null;
+// Set by seedOwner() on startup. Null until seeding completes.
+let mainAgentId: number | null = null;
+// Keyed as "service:identifier" for O(1) lookup.
+let ownerIdentitySet: Set<string> = new Set();
+
+export function getOwnerInterlocutorId(): number {
+  if (ownerInterlocutorId === null) {
+    throw new Error("Owner interlocutor ID accessed before seedOwner() completed.");
+  }
+  return ownerInterlocutorId;
+}
+
+export function getMainAgentId(): number {
+  if (mainAgentId === null) {
+    throw new Error("Main agent ID accessed before seedOwner() completed.");
+  }
+  return mainAgentId;
+}
+
+export function isOwnerIdentity(service: string, identifier: string): boolean {
+  return ownerIdentitySet.has(`${service}:${identifier}`);
+}
+
+export async function initializeAgentsSchema(pool: pg.Pool): Promise<void> {
+  // The agents table must be created first because messages, compactions, and
+  // interlocutors all reference it.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS agents (
+      id SERIAL PRIMARY KEY,
+      name TEXT NOT NULL,
+      system_prompt TEXT NOT NULL DEFAULT '',
+      allowed_tools TEXT[] NOT NULL DEFAULT '{}',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS interlocutors (
+      id SERIAL PRIMARY KEY,
+      display_name TEXT NOT NULL UNIQUE,
+      owner BOOLEAN NOT NULL DEFAULT FALSE,
+      enabled BOOLEAN NOT NULL DEFAULT TRUE,
+      agent_id INTEGER REFERENCES agents(id),
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  // The old schema had an instructions column; remove it if it exists.
+  await pool.query(`ALTER TABLE interlocutors DROP COLUMN IF EXISTS instructions`);
+  // The old schema had no agent_id column; add it if it doesn't exist.
+  await pool.query(`ALTER TABLE interlocutors ADD COLUMN IF NOT EXISTS agent_id INTEGER REFERENCES agents(id)`);
+  await pool.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS one_owner ON interlocutors (owner) WHERE owner = true
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS interlocutor_identities (
+      id SERIAL PRIMARY KEY,
+      interlocutor_id INTEGER NOT NULL REFERENCES interlocutors(id) ON DELETE CASCADE,
+      service TEXT NOT NULL,
+      identifier TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  // The old schema had identifier NOT NULL; make it nullable to support soft-deletion.
+  await pool.query(`ALTER TABLE interlocutor_identities ALTER COLUMN identifier DROP NOT NULL`);
+  // The old schema had a regular UNIQUE (service, identifier) constraint. Drop it before
+  // creating the partial index, which only covers non-null identifiers to allow multiple
+  // soft-deleted rows per service.
+  await pool.query(`
+    DO $$
+    BEGIN
+      IF EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'interlocutor_identities_service_identifier_key'
+          AND conrelid = 'interlocutor_identities'::regclass
+      ) THEN
+        ALTER TABLE interlocutor_identities DROP CONSTRAINT interlocutor_identities_service_identifier_key;
+      END IF;
+    END
+    $$
+  `);
+  // Soft-deleted rows (identifier IS NULL) must not conflict with each other, so we
+  // use a partial unique index that only covers non-null identifiers.
+  await pool.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS interlocutor_identities_service_identifier
+      ON interlocutor_identities (service, identifier)
+      WHERE identifier IS NOT NULL
+  `);
+
+  // Drop the old interlocutor_id columns from messages and compactions (added by the
+  // previous schema migration). There is no production data in these columns.
+  await pool.query(`ALTER TABLE messages DROP COLUMN IF EXISTS interlocutor_id`);
+  await pool.query(`ALTER TABLE compactions DROP COLUMN IF EXISTS interlocutor_id`);
+
+  // Add agent_id as nullable first so existing rows (which predate the agents system)
+  // can be backfilled before the NOT NULL constraint is applied.
+  await pool.query(`ALTER TABLE messages ADD COLUMN IF NOT EXISTS agent_id INTEGER REFERENCES agents(id)`);
+  await pool.query(`ALTER TABLE compactions ADD COLUMN IF NOT EXISTS agent_id INTEGER REFERENCES agents(id)`);
+
+  // Add the sender columns to messages. Both are nullable; at most one may be set per row.
+  await pool.query(`ALTER TABLE messages ADD COLUMN IF NOT EXISTS sender_identity_id INTEGER REFERENCES interlocutor_identities(id)`);
+  await pool.query(`ALTER TABLE messages ADD COLUMN IF NOT EXISTS sender_agent_id INTEGER REFERENCES agents(id)`);
+
+  // Enforce the at-most-one-sender invariant. The constraint name is stable so
+  // IF NOT EXISTS semantics are achieved by catching the duplicate-object error.
+  await pool.query(`
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint WHERE conname = 'messages_at_most_one_sender'
+      ) THEN
+        ALTER TABLE messages ADD CONSTRAINT messages_at_most_one_sender
+          CHECK (
+            NOT (sender_identity_id IS NOT NULL AND sender_agent_id IS NOT NULL)
+          );
+      END IF;
+    END
+    $$
+  `);
+}
+
+export async function seedOwner(pool: pg.Pool, ownerConfig: OwnerConfig): Promise<number> {
+  // Seed the main agent (agent 1) first. Its system prompt is built at runtime from
+  // files, so we store an empty string here and never read it back from the DB.
+  const agentResult = await pool.query<{ id: number }>(
+    `INSERT INTO agents (id, name, system_prompt, allowed_tools)
+     VALUES (1, 'main', '', '{*}')
+     ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name
+     RETURNING id`,
+  );
+  const seededMainAgentId = agentResult.rows[0].id;
+  console.log(`[stavrobot] Main agent seeded: id=${seededMainAgentId}`);
+
+  // Backfill existing messages and compactions that predate the agents system.
+  const messagesResult = await pool.query(
+    "UPDATE messages SET agent_id = $1 WHERE agent_id IS NULL",
+    [seededMainAgentId],
+  );
+  const compactionsResult = await pool.query(
+    "UPDATE compactions SET agent_id = $1 WHERE agent_id IS NULL",
+    [seededMainAgentId],
+  );
+  console.log(`[stavrobot] Backfilled ${messagesResult.rowCount ?? 0} message(s) and ${compactionsResult.rowCount ?? 0} compaction(s) to main agent`);
+
+  // Use a select-then-insert/update pattern because the partial unique index on
+  // owner=true cannot be used as an ON CONFLICT target in standard SQL.
+  const existing = await pool.query<{ id: number }>(
+    "SELECT id FROM interlocutors WHERE owner = true",
+  );
+
+  let ownerId: number;
+  if (existing.rows.length > 0) {
+    ownerId = existing.rows[0].id;
+    await pool.query(
+      "UPDATE interlocutors SET display_name = $1, agent_id = $2 WHERE id = $3",
+      [ownerConfig.name, seededMainAgentId, ownerId],
+    );
+    console.log(`[stavrobot] Owner interlocutor updated: id=${ownerId}, name=${ownerConfig.name}`);
+  } else {
+    const result = await pool.query<{ id: number }>(
+      "INSERT INTO interlocutors (display_name, owner, agent_id) VALUES ($1, true, $2) RETURNING id",
+      [ownerConfig.name, seededMainAgentId],
+    );
+    ownerId = result.rows[0].id;
+    console.log(`[stavrobot] Owner interlocutor created: id=${ownerId}, name=${ownerConfig.name}`);
+  }
+
+  // Upsert each configured identity for the owner.
+  const identities: Array<{ service: string; identifier: string }> = [];
+  if (ownerConfig.signal !== undefined) {
+    identities.push({ service: "signal", identifier: ownerConfig.signal });
+  }
+  if (ownerConfig.telegram !== undefined) {
+    identities.push({ service: "telegram", identifier: ownerConfig.telegram });
+  }
+
+  for (const identity of identities) {
+    // The partial unique index only covers rows where identifier IS NOT NULL, so
+    // the ON CONFLICT clause must repeat the same WHERE predicate.
+    await pool.query(
+      `INSERT INTO interlocutor_identities (interlocutor_id, service, identifier)
+       VALUES ($1, $2, $3)
+       ON CONFLICT (service, identifier) WHERE identifier IS NOT NULL
+       DO UPDATE SET interlocutor_id = $1`,
+      [ownerId, identity.service, identity.identifier],
+    );
+    console.log(`[stavrobot] Owner identity upserted: service=${identity.service}, identifier=${identity.identifier}`);
+  }
+
+  ownerInterlocutorId = ownerId;
+  mainAgentId = seededMainAgentId;
+  ownerIdentitySet = new Set(identities.map(({ service, identifier }) => `${service}:${identifier}`));
+
+  return ownerId;
+}
+
+export interface Agent {
+  id: number;
+  name: string;
+  systemPrompt: string;
+  allowedTools: string[];
+  createdAt: Date;
+}
+
+export async function loadAgent(pool: pg.Pool, agentId: number): Promise<Agent | null> {
+  const result = await pool.query<{
+    id: number;
+    name: string;
+    system_prompt: string;
+    allowed_tools: string[];
+    created_at: Date;
+  }>(
+    "SELECT id, name, system_prompt, allowed_tools, created_at FROM agents WHERE id = $1",
+    [agentId],
+  );
+  if (result.rows.length === 0) {
+    return null;
+  }
+  const row = result.rows[0];
+  return {
+    id: row.id,
+    name: row.name,
+    systemPrompt: row.system_prompt,
+    allowedTools: row.allowed_tools,
+    createdAt: row.created_at,
+  };
+}
+
+export async function createAgent(
+  pool: pg.Pool,
+  name: string,
+  systemPrompt: string,
+  allowedTools: string[],
+): Promise<number> {
+  const result = await pool.query<{ id: number }>(
+    "INSERT INTO agents (name, system_prompt, allowed_tools) VALUES ($1, $2, $3) RETURNING id",
+    [name, systemPrompt, allowedTools],
+  );
+  const newId = result.rows[0].id;
+  console.log(`[stavrobot] Agent created: id=${newId}, name=${name}`);
+  return newId;
+}
+
+export async function updateAgent(
+  pool: pg.Pool,
+  agentId: number,
+  fields: { name?: string; systemPrompt?: string; allowedTools?: string[] },
+): Promise<void> {
+  const setClauses: string[] = [];
+  const values: unknown[] = [];
+  let paramIndex = 1;
+
+  if (fields.name !== undefined) {
+    setClauses.push(`name = $${paramIndex++}`);
+    values.push(fields.name);
+  }
+  if (fields.systemPrompt !== undefined) {
+    setClauses.push(`system_prompt = $${paramIndex++}`);
+    values.push(fields.systemPrompt);
+  }
+  if (fields.allowedTools !== undefined) {
+    setClauses.push(`allowed_tools = $${paramIndex++}`);
+    values.push(fields.allowedTools);
+  }
+
+  if (setClauses.length === 0) {
+    return;
+  }
+
+  values.push(agentId);
+  await pool.query(
+    `UPDATE agents SET ${setClauses.join(", ")} WHERE id = $${paramIndex}`,
+    values,
+  );
+  console.log(`[stavrobot] Agent updated: id=${agentId}`);
+}
+
+export async function listAgents(pool: pg.Pool): Promise<Agent[]> {
+  const result = await pool.query<{
+    id: number;
+    name: string;
+    system_prompt: string;
+    allowed_tools: string[];
+    created_at: Date;
+  }>(
+    "SELECT id, name, system_prompt, allowed_tools, created_at FROM agents ORDER BY id",
+  );
+  return result.rows.map((row) => ({
+    id: row.id,
+    name: row.name,
+    systemPrompt: row.system_prompt,
+    allowedTools: row.allowed_tools,
+    createdAt: row.created_at,
+  }));
+}
+
 export interface Memory {
   id: number;
   content: string;
@@ -96,9 +394,92 @@ export interface Compaction {
   upToMessageId: number;
 }
 
-export async function loadLatestCompaction(pool: pg.Pool): Promise<Compaction | null> {
+export interface InterlocutorInfo {
+  interlocutorId: number;
+  identityId: number;
+  agentId: number;
+  isOwner: boolean;
+  displayName: string;
+}
+
+export async function resolveInterlocutorByName(
+  pool: pg.Pool,
+  displayName: string,
+): Promise<{ id: number } | null> {
+  const result = await pool.query<{ id: number }>(
+    "SELECT id FROM interlocutors WHERE display_name = $1",
+    [displayName],
+  );
+  if (result.rows.length === 0) {
+    return null;
+  }
+  return { id: result.rows[0].id };
+}
+
+export async function resolveRecipient(
+  pool: pg.Pool,
+  displayName: string,
+  service: string,
+): Promise<{ identifier: string } | { disabled: true; displayName: string } | null> {
+  const result = await pool.query<{ identifier: string | null; enabled: boolean }>(
+    // Exclude soft-deleted identities (identifier IS NULL) from recipient resolution.
+    `SELECT ii.identifier, i.enabled
+     FROM interlocutors i
+     LEFT JOIN interlocutor_identities ii ON ii.interlocutor_id = i.id AND ii.service = $2 AND ii.identifier IS NOT NULL
+     WHERE i.display_name = $1`,
+    [displayName, service],
+  );
+  if (result.rows.length === 0) {
+    return null;
+  }
+  const row = result.rows[0];
+  if (!row.enabled) {
+    return { disabled: true, displayName };
+  }
+  if (row.identifier === null) {
+    return null;
+  }
+  return { identifier: row.identifier };
+}
+
+export async function resolveInterlocutor(
+  pool: pg.Pool,
+  service: string,
+  identifier: string,
+): Promise<InterlocutorInfo | null> {
+  const result = await pool.query<{
+    interlocutor_id: number;
+    identity_id: number;
+    agent_id: number | null;
+    display_name: string;
+  }>(
+    `SELECT i.id AS interlocutor_id, ii.id AS identity_id, i.agent_id, i.display_name
+     FROM interlocutor_identities ii
+     JOIN interlocutors i ON i.id = ii.interlocutor_id
+     WHERE ii.service = $1 AND ii.identifier = $2 AND i.enabled = true`,
+    [service, identifier],
+  );
+  if (result.rows.length === 0) {
+    return null;
+  }
+  const row = result.rows[0];
+  // Interlocutors with no assigned agent have their messages dropped by the queue.
+  if (row.agent_id === null) {
+    return null;
+  }
+  return {
+    interlocutorId: row.interlocutor_id,
+    identityId: row.identity_id,
+    agentId: row.agent_id,
+    isOwner: row.interlocutor_id === getOwnerInterlocutorId(),
+    displayName: row.display_name,
+  };
+}
+
+export async function loadLatestCompaction(pool: pg.Pool, agentId: number): Promise<Compaction | null> {
   const result = await pool.query(
-    "SELECT id, summary, up_to_message_id FROM compactions ORDER BY id DESC LIMIT 1"
+    "SELECT id, summary, up_to_message_id FROM compactions WHERE agent_id = $1 ORDER BY id DESC LIMIT 1",
+    [agentId],
   );
   if (result.rows.length === 0) {
     return null;
@@ -111,24 +492,27 @@ export async function loadLatestCompaction(pool: pg.Pool): Promise<Compaction | 
   };
 }
 
-export async function saveCompaction(pool: pg.Pool, summary: string, upToMessageId: number): Promise<void> {
+export async function saveCompaction(pool: pg.Pool, summary: string, upToMessageId: number, agentId: number): Promise<void> {
   await pool.query(
-    "INSERT INTO compactions (summary, up_to_message_id) VALUES ($1, $2)",
-    [summary, upToMessageId]
+    "INSERT INTO compactions (summary, up_to_message_id, agent_id) VALUES ($1, $2, $3)",
+    [summary, upToMessageId, agentId],
   );
 }
 
-export async function loadMessages(pool: pg.Pool): Promise<AgentMessage[]> {
-  const compaction = await loadLatestCompaction(pool);
-  
+export async function loadMessages(pool: pg.Pool, agentId: number): Promise<AgentMessage[]> {
+  const compaction = await loadLatestCompaction(pool, agentId);
+
   if (compaction === null) {
-    const result = await pool.query("SELECT content FROM messages ORDER BY id");
+    const result = await pool.query(
+      "SELECT content FROM messages WHERE agent_id = $1 ORDER BY id",
+      [agentId],
+    );
     return result.rows.map((row) => row.content as AgentMessage);
   }
-  
+
   const result = await pool.query(
-    "SELECT content FROM messages WHERE id > $1 ORDER BY id",
-    [compaction.upToMessageId]
+    "SELECT content FROM messages WHERE agent_id = $1 AND id > $2 ORDER BY id",
+    [agentId, compaction.upToMessageId],
   );
   let messages = result.rows.map((row) => row.content as AgentMessage);
 
@@ -150,14 +534,20 @@ export async function loadMessages(pool: pg.Pool): Promise<AgentMessage[]> {
     content: [{ type: "text", text: `[Summary of earlier conversation]\n${compaction.summary}` }],
     timestamp: Date.now(),
   };
-  
+
   return [syntheticMessage, ...messages];
 }
 
-export async function saveMessage(pool: pg.Pool, message: AgentMessage): Promise<void> {
+export async function saveMessage(
+  pool: pg.Pool,
+  message: AgentMessage,
+  agentId: number,
+  senderIdentityId?: number,
+  senderAgentId?: number,
+): Promise<void> {
   await pool.query(
-    "INSERT INTO messages (role, content) VALUES ($1, $2)",
-    [message.role, message]
+    "INSERT INTO messages (role, content, agent_id, sender_identity_id, sender_agent_id) VALUES ($1, $2, $3, $4, $5)",
+    [message.role, message, agentId, senderIdentityId ?? null, senderAgentId ?? null],
   );
 }
 
@@ -427,7 +817,7 @@ export async function deleteScratchpad(pool: pg.Pool, id: number): Promise<numbe
 
 export async function executeSql(pool: pg.Pool, sql: string): Promise<string> {
   const result = await pool.query(sql);
-  
+
   if (result.command === "SELECT") {
     return encodeToToon(result.rows);
   } else {
