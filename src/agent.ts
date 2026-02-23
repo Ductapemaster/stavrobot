@@ -14,6 +14,7 @@ import { createWebFetchTool } from "./web-fetch.js";
 import { createInstallPluginTool, createUpdatePluginTool, createRemovePluginTool, createConfigurePluginTool, createListPluginsTool, createShowPluginTool, createRunPluginToolTool, createCreatePluginTool, createRequestCodingTaskTool } from "./plugin-tools.js";
 import { createRunPythonTool } from "./python.js";
 import { createUpsertPageTool, createDeletePageTool } from "./pages.js";
+import { createSearchTool } from "./search.js";
 import { createReadUploadTool, createDeleteUploadTool } from "./upload-tools.js";
 import { convertMarkdownToTelegramHtml } from "./telegram.js";
 import { sendSignalMessage } from "./signal.js";
@@ -643,7 +644,7 @@ export function createManageCronTool(pool: pg.Pool): AgentTool {
 export async function createAgent(config: Config, pool: pg.Pool): Promise<Agent> {
   const model = getModel(config.provider as any, config.model as any);
   const messages = await loadMessages(pool);
-  const tools = [createExecuteSqlTool(pool), createManageKnowledgeTool(pool), createSendSignalMessageTool(), createManageCronTool(pool), createRunPythonTool(), createUpsertPageTool(pool), createDeletePageTool(pool), createReadUploadTool(), createDeleteUploadTool()];
+  const tools = [createExecuteSqlTool(pool), createManageKnowledgeTool(pool), createSendSignalMessageTool(), createManageCronTool(pool), createRunPythonTool(), createUpsertPageTool(pool), createDeletePageTool(pool), createReadUploadTool(), createDeleteUploadTool(), createSearchTool(pool)];
   if (config.webSearch !== undefined) {
     tools.push(createWebSearchTool(config.webSearch));
   }
