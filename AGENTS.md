@@ -184,6 +184,8 @@ The Python code (`client.py`) is a standalone CLI client with no third-party dep
 - Do not mention AI in commit messages. Write them as if the human wrote the code.
 - DO NOT REVERT ANY CHANGES. If you notice unrelated changes in the repo, pause and ask
   the user, as they might be changes the user has made.
+- After completing any task that modifies files, always run `jj describe -m "..."` with
+  an appropriate message describing the whole change.
 
 ## Coder subsystem
 
