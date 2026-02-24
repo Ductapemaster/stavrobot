@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import pg from "pg";
-import { Type, getModel, type TextContent, type ImageContent, type AssistantMessage, complete } from "@mariozechner/pi-ai";
+import { Type, getModel, type TextContent, type ImageContent, type AssistantMessage, type Model, complete } from "@mariozechner/pi-ai";
 import { Agent, type AgentTool, type AgentToolResult, type AgentMessage } from "@mariozechner/pi-agent-core";
 import type { Config, TelegramConfig, TtsConfig } from "./config.js";
 import type { FileAttachment } from "./uploads.js";
@@ -642,7 +642,29 @@ export function createManageCronTool(pool: pg.Pool): AgentTool {
 }
 
 export async function createAgent(config: Config, pool: pg.Pool): Promise<Agent> {
-  const model = getModel(config.provider as any, config.model as any);
+  let model: Model<any>;
+  if (config.lmstudio !== undefined) {
+    model = {
+      id: config.lmstudio.model,
+      name: config.lmstudio.model,
+      api: "openai-completions",
+      provider: "lm-studio",
+      baseUrl: config.lmstudio.baseUrl,
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: config.lmstudio.contextWindow ?? 32768,
+      maxTokens: config.lmstudio.maxTokens ?? 4096,
+      compat: {
+        supportsStore: false,
+        supportsReasoningEffort: false,
+        supportsDeveloperRole: false,
+        maxTokensField: "max_tokens",
+      },
+    };
+  } else {
+    model = getModel(config.provider as any, config.model as any);
+  }
   const messages = await loadMessages(pool);
   const tools = [createExecuteSqlTool(pool), createManageKnowledgeTool(pool), createSendSignalMessageTool(), createManageCronTool(pool), createRunPythonTool(), createUpsertPageTool(pool), createDeletePageTool(pool), createReadUploadTool(), createDeleteUploadTool(), createSearchTool(pool)];
   if (config.webSearch !== undefined) {
@@ -684,7 +706,7 @@ export async function createAgent(config: Config, pool: pg.Pool): Promise<Agent>
       tools,
       messages,
     },
-    getApiKey: () => getApiKey(config),
+    getApiKey: config.lmstudio !== undefined ? () => "lm-studio" : () => getApiKey(config),
   });
 
   return agent;
