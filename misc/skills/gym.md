@@ -39,15 +39,22 @@ Create the following tables if they do not already exist.
 
 ## Step 2: Create the pages
 
-Create the following three pages using `upsert_page`. All pages must be private (not public).
+Create the following four pages using `upsert_page`. All pages must be private (not public).
 
-**`/pages/gym`** — Main dashboard.
+**`/pages/gym`** — Workout list.
 
-Show the latest body measurement at the top of the page. Below that, list the most recent 10 workouts in reverse chronological order. For each workout, show the date, duration (if set), any notes, and a breakdown of every set performed: exercise name, set number, reps, weight, and set notes.
+Show the latest body measurement at the top of the page. Below that, list the most recent workouts in reverse chronological order. For each workout, show the date, duration (if set), notes, and a brief summary (e.g. number of exercises and total sets). Each workout should be a clickable link to its detail page at `/pages/gym/workout?id=<workout_id>`.
 
 Define two named queries:
-- `recent_workouts`: returns the 10 most recent workouts joined with their sets and the exercise name, ordered by workout date descending then by set number ascending.
+- `recent_workouts`: returns recent workouts ordered by date descending, with a count of distinct exercises and total sets for each.
 - `latest_measurement`: returns the single most recent row from `body_measurements`.
+
+**`/pages/gym/workout`** — Workout detail.
+
+Shows the full detail of a single workout, identified by the `id` query parameter. Display the date, duration (if set), notes, and a full breakdown of every set performed: exercise name, set number, reps, weight, and set notes. Group sets by exercise.
+
+Define one named query:
+- `workout_detail`: parameterized by workout id; returns all sets for that workout joined with the exercise name, ordered by exercise name then set number.
 
 **`/pages/gym/progress`** — Progress tracking.
 
