@@ -227,20 +227,20 @@ The agent has access to these tools, conditionally enabled based on configuratio
 - `send_signal_message` — Send text or attachments via Signal.
 - `manage_cron` — Create, update, delete, or list scheduled cron entries.
 - `run_python` — Execute Python code in the sandboxed python-runner.
-- `upsert_page` — Create or update a web page with optional named queries.
-- `delete_page` — Delete a web page.
-- `read_upload` — Read uploaded file contents (text or image).
-- `delete_upload` — Delete an uploaded file.
+- `manage_pages` — Create, update, or delete web pages with optional named queries.
+- `manage_uploads` — Read or delete uploaded files.
 - `manage_files` — Write, read, list, or delete files in an ephemeral temp directory (`/tmp/stavrobot-temp/files/`). Supports utf-8 and base64 encodings. File paths can be passed as `attachmentPath` to `send_signal_message` or `send_telegram_message`.
-- `install_plugin`, `update_plugin`, `remove_plugin`, `configure_plugin` — Manage git-installed plugins.
-- `list_plugins`, `show_plugin`, `run_plugin_tool` — Discover and execute plugin tools.
+- `manage_plugins` — Install, update, remove, configure, list, or show plugins.
+- `run_plugin_tool` — Execute a plugin tool.
 
 **Conditionally available:**
 - `web_search` — Search the web via Anthropic's server-side web search tool (requires `[webSearch]` config).
 - `web_fetch` — Fetch a URL and process its content with an LLM (requires `[webFetch]` config).
 - `text_to_speech` — Convert text to speech via OpenAI TTS API (requires `[tts]` config).
 - `send_telegram_message` — Send text or attachments via Telegram (requires `[telegram]` config).
-- `create_plugin`, `request_coding_task` — Create editable plugins and send coding tasks to the coder agent (requires `[coder]` config).
+- `request_coding_task` — Send coding tasks to the coder agent (requires `[coder]` config).
+
+Action-based tools (`manage_knowledge`, `manage_cron`, `manage_files`, `manage_pages`, `manage_uploads`, `manage_plugins`) support a `help` action that returns detailed documentation.
 
 ## Conversation compaction
 
@@ -267,8 +267,8 @@ Plugin names must match `[a-z0-9-]+`.
 
 ### Plugin types
 
-- **Git-installed:** Cloned from a git URL. Cannot be modified by the coder agent. Managed with `install_plugin`, `update_plugin`, `remove_plugin`.
-- **Editable (locally created):** Created via `create_plugin`. Can be modified by the coder agent via `request_coding_task`. Distinguished by the absence of a `.git` directory.
+- **Git-installed:** Cloned from a git URL. Cannot be modified by the coder agent. Managed with `manage_plugins`.
+- **Editable (locally created):** Created via `manage_plugins (action: create)`. Can be modified by the coder agent via `request_coding_task`. Distinguished by the absence of a `.git` directory.
 
 ### Plugin isolation
 
@@ -379,14 +379,14 @@ src/
   telegram-api.ts   — Low-level Telegram sendMessage API call.
   signal.ts         — Low-level Signal bridge send call.
   plugins.ts        — Plugin management web UI and proxy endpoints.
-  plugin-tools.ts   — Agent tools for plugin CRUD and execution.
+  plugin-tools.ts   — Agent tools for plugin management and execution.
   python.ts         — Agent tool for sandboxed Python execution.
   web-search.ts     — Agent tool for web search via Anthropic API.
   web-fetch.ts      — Agent tool for URL fetching and LLM analysis.
   stt.ts            — Speech-to-text via OpenAI API with audio format conversion.
-  pages.ts          — Agent tools for page CRUD.
+  pages.ts          — Agent tool for page management.
   uploads.ts        — File upload handling and storage.
-  upload-tools.ts   — Agent tools for reading and deleting uploads.
+  upload-tools.ts   — Agent tool for upload management.
   explorer.ts       — Database explorer web UI and API.
 
 plugin-runner/

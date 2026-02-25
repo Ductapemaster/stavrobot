@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import type { TextContent, ImageContent } from "@mariozechner/pi-ai";
-import { createReadUploadTool, createDeleteUploadTool } from "./upload-tools.js";
+import { createManageUploadsTool } from "./upload-tools.js";
 import { UPLOADS_DIR } from "./uploads.js";
 
 function asText(content: unknown): string {
@@ -37,8 +37,18 @@ async function fileExists(filePath: string): Promise<boolean> {
   }
 }
 
-describe("createReadUploadTool", () => {
-  const tool = createReadUploadTool();
+describe("createManageUploadsTool - help", () => {
+  const tool = createManageUploadsTool();
+
+  it("returns help text for the help action", async () => {
+    const result = await tool.execute("call-help", { action: "help" });
+    expect(result.content[0].type).toBe("text");
+    expect(asText(result.content[0])).toMatch(/manage_uploads/i);
+  });
+});
+
+describe("createManageUploadsTool - read", () => {
+  const tool = createManageUploadsTool();
   const testFilename = "upload-test-read-tool.txt";
   const testPath = path.join(UPLOADS_DIR, testFilename);
 
@@ -52,23 +62,23 @@ describe("createReadUploadTool", () => {
 
   it("returns file contents for a valid .txt upload file", async () => {
     await writeTestFile(testFilename, "hello from test");
-    const result = await tool.execute("call-1", { path: testPath });
+    const result = await tool.execute("call-1", { action: "read", path: testPath });
     expect(result.content[0].type).toBe("text");
     expect(asText(result.content[0])).toBe("hello from test");
   });
 
   it("returns an error message when the file does not exist", async () => {
-    const result = await tool.execute("call-2", { path: path.join(UPLOADS_DIR, "upload-nonexistent-xyz.txt") });
+    const result = await tool.execute("call-2", { action: "read", path: path.join(UPLOADS_DIR, "upload-nonexistent-xyz.txt") });
     expect(asText(result.content[0])).toMatch(/not found/i);
   });
 
   it("rejects paths outside the uploads directory", async () => {
-    const result = await tool.execute("call-3", { path: "/etc/passwd" });
+    const result = await tool.execute("call-3", { action: "read", path: "/etc/passwd" });
     expect(asText(result.content[0])).toMatch(/invalid path/i);
   });
 
   it("rejects paths that traverse out of the uploads directory", async () => {
-    const result = await tool.execute("call-4", { path: path.join(UPLOADS_DIR, "../etc/passwd") });
+    const result = await tool.execute("call-4", { action: "read", path: path.join(UPLOADS_DIR, "../etc/passwd") });
     expect(asText(result.content[0])).toMatch(/invalid path/i);
   });
 
@@ -76,7 +86,7 @@ describe("createReadUploadTool", () => {
     vi.spyOn(fs, "readFile").mockRejectedValueOnce(
       Object.assign(new Error("Permission denied"), { code: "EACCES" }),
     );
-    await expect(tool.execute("call-5", { path: path.join(UPLOADS_DIR, "upload-perm-denied.txt") })).rejects.toThrow("Permission denied");
+    await expect(tool.execute("call-5", { action: "read", path: path.join(UPLOADS_DIR, "upload-perm-denied.txt") })).rejects.toThrow("Permission denied");
     vi.restoreAllMocks();
   });
 
@@ -85,7 +95,7 @@ describe("createReadUploadTool", () => {
     const imageData = Buffer.from([0xff, 0xd8, 0xff, 0xe0]); // minimal JPEG header bytes
     const imagePath = await writeTestBinaryFile(imageFilename, imageData);
     try {
-      const result = await tool.execute("call-6", { path: imagePath });
+      const result = await tool.execute("call-6", { action: "read", path: imagePath });
       const imageContent = asImage(result.content[0]);
       expect(imageContent.type).toBe("image");
       expect(imageContent.mimeType).toBe("image/jpeg");
@@ -100,7 +110,7 @@ describe("createReadUploadTool", () => {
     const imageData = Buffer.from([0x89, 0x50, 0x4e, 0x47]); // minimal PNG header bytes
     const imagePath = await writeTestBinaryFile(imageFilename, imageData);
     try {
-      const result = await tool.execute("call-7", { path: imagePath });
+      const result = await tool.execute("call-7", { action: "read", path: imagePath });
       const imageContent = asImage(result.content[0]);
       expect(imageContent.type).toBe("image");
       expect(imageContent.mimeType).toBe("image/png");
@@ -113,7 +123,7 @@ describe("createReadUploadTool", () => {
     const pdfFilename = "upload-test-read-tool.pdf";
     const pdfPath = await writeTestBinaryFile(pdfFilename, Buffer.from("%PDF-1.4"));
     try {
-      const result = await tool.execute("call-8", { path: pdfPath });
+      const result = await tool.execute("call-8", { action: "read", path: pdfPath });
       expect(result.content[0].type).toBe("text");
       expect(asText(result.content[0])).toMatch(/cannot read binary file/i);
       expect(asText(result.content[0])).toContain(".pdf");
@@ -128,17 +138,22 @@ describe("createReadUploadTool", () => {
     await fs.mkdir(UPLOADS_DIR, { recursive: true });
     await fs.writeFile(noExtPath, "plain text content", "utf-8");
     try {
-      const result = await tool.execute("call-9", { path: noExtPath });
+      const result = await tool.execute("call-9", { action: "read", path: noExtPath });
       expect(result.content[0].type).toBe("text");
       expect(asText(result.content[0])).toBe("plain text content");
     } finally {
       await fs.unlink(noExtPath);
     }
   });
+
+  it("returns an error when path is missing", async () => {
+    const result = await tool.execute("call-10", { action: "read" });
+    expect(asText(result.content[0])).toMatch(/path is required/i);
+  });
 });
 
-describe("createDeleteUploadTool", () => {
-  const tool = createDeleteUploadTool();
+describe("createManageUploadsTool - delete", () => {
+  const tool = createManageUploadsTool();
   const testFilename = "upload-test-delete-tool.txt";
   const testPath = path.join(UPLOADS_DIR, testFilename);
 
@@ -155,23 +170,23 @@ describe("createDeleteUploadTool", () => {
   });
 
   it("deletes the file and returns a success message", async () => {
-    const result = await tool.execute("call-1", { path: testPath });
+    const result = await tool.execute("call-1", { action: "delete", path: testPath });
     expect(asText(result.content[0])).toMatch(/deleted/i);
     expect(await fileExists(testPath)).toBe(false);
   });
 
   it("returns a 'not found' message when the file does not exist", async () => {
-    const result = await tool.execute("call-2", { path: path.join(UPLOADS_DIR, "upload-nonexistent-xyz.txt") });
+    const result = await tool.execute("call-2", { action: "delete", path: path.join(UPLOADS_DIR, "upload-nonexistent-xyz.txt") });
     expect(asText(result.content[0])).toMatch(/not found/i);
   });
 
   it("rejects paths outside the uploads directory", async () => {
-    const result = await tool.execute("call-3", { path: "/etc/passwd" });
+    const result = await tool.execute("call-3", { action: "delete", path: "/etc/passwd" });
     expect(asText(result.content[0])).toMatch(/invalid path/i);
   });
 
   it("rejects paths that traverse out of the uploads directory", async () => {
-    const result = await tool.execute("call-4", { path: path.join(UPLOADS_DIR, "../etc/passwd") });
+    const result = await tool.execute("call-4", { action: "delete", path: path.join(UPLOADS_DIR, "../etc/passwd") });
     expect(asText(result.content[0])).toMatch(/invalid path/i);
   });
 
@@ -179,7 +194,12 @@ describe("createDeleteUploadTool", () => {
     vi.spyOn(fs, "unlink").mockRejectedValueOnce(
       Object.assign(new Error("Permission denied"), { code: "EACCES" }),
     );
-    await expect(tool.execute("call-5", { path: path.join(UPLOADS_DIR, "upload-perm-denied.txt") })).rejects.toThrow("Permission denied");
+    await expect(tool.execute("call-5", { action: "delete", path: path.join(UPLOADS_DIR, "upload-perm-denied.txt") })).rejects.toThrow("Permission denied");
     vi.restoreAllMocks();
+  });
+
+  it("returns an error when path is missing", async () => {
+    const result = await tool.execute("call-6", { action: "delete" });
+    expect(asText(result.content[0])).toMatch(/path is required/i);
   });
 });

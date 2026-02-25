@@ -11,12 +11,12 @@ import { executeSql, loadMessages, saveMessage, saveCompaction, loadLatestCompac
 import { reloadScheduler } from "./scheduler.js";
 import { createWebSearchTool } from "./web-search.js";
 import { createWebFetchTool } from "./web-fetch.js";
-import { createInstallPluginTool, createUpdatePluginTool, createRemovePluginTool, createConfigurePluginTool, createListPluginsTool, createShowPluginTool, createRunPluginToolTool, createCreatePluginTool, createRequestCodingTaskTool } from "./plugin-tools.js";
+import { createManagePluginsTool, createRunPluginToolTool, createRequestCodingTaskTool } from "./plugin-tools.js";
 import { createRunPythonTool } from "./python.js";
-import { createUpsertPageTool, createDeletePageTool } from "./pages.js";
+import { createManagePagesTool } from "./pages.js";
 import { createManageFilesTool } from "./files.js";
 import { createSearchTool } from "./search.js";
-import { createReadUploadTool, createDeleteUploadTool } from "./upload-tools.js";
+import { createManageUploadsTool } from "./upload-tools.js";
 import { convertMarkdownToTelegramHtml } from "./telegram.js";
 import { sendSignalMessage } from "./signal.js";
 import { sendTelegramMessage } from "./telegram-api.js";
@@ -60,28 +60,36 @@ export function createExecuteSqlTool(pool: pg.Pool): AgentTool {
   };
 }
 
+const MANAGE_KNOWLEDGE_HELP_TEXT = `manage_knowledge: upsert or delete entries in the two-tier knowledge store.
+
+Stores:
+- memory: full content is injected into the system prompt every turn. Use for frequently needed facts, user preferences, and anything that should always be in context. Keep entries concise — they consume context on every request.
+- scratchpad: only titles are injected each turn; bodies are read on demand via execute_sql. Use for less frequent, longer-form knowledge such as reference material, detailed notes, or anything that doesn't need to be in context every turn.
+
+Actions:
+- upsert: create or update an entry. Parameters: store (required), id (omit to create, provide to update), content (required for memory), title (required for scratchpad), body (required for scratchpad).
+- delete: remove an entry by id. Parameters: store (required), id (required).
+- help: show this help text.
+
+Constraints:
+- Memory entries are injected in full every turn; keep them concise.
+- Scratchpad bodies are not injected automatically; read them via execute_sql on the "scratchpad" table.`;
+
 export function createManageKnowledgeTool(pool: pg.Pool): AgentTool {
   return {
     name: "manage_knowledge",
     label: "Manage knowledge",
-    description: `Upsert or delete entries in the two-tier knowledge store.
-
-**Memory** (store: "memory"): full content is injected into the system prompt every turn. Use for frequently needed facts, user preferences, and anything that should always be in context. Keep entries concise — they consume context on every request.
-
-**Scratchpad** (store: "scratchpad"): only titles are injected each turn; bodies are read on demand via execute_sql. Use for less frequent, longer-form knowledge such as reference material, detailed notes, or anything that doesn't need to be in context every turn.
-
-Actions:
-- upsert: create (omit id) or update (provide id) an entry
-- delete: remove an entry by id`,
+    description: "Upsert or delete entries in the two-tier knowledge store (memory and scratchpad). Use the 'help' action for details.",
     parameters: Type.Object({
       action: Type.Union([
         Type.Literal("upsert"),
         Type.Literal("delete"),
-      ], { description: "Action to perform: upsert or delete." }),
-      store: Type.Union([
+        Type.Literal("help"),
+      ], { description: "Action to perform: upsert, delete, or help." }),
+      store: Type.Optional(Type.Union([
         Type.Literal("memory"),
         Type.Literal("scratchpad"),
-      ], { description: "Which store to operate on: memory or scratchpad." }),
+      ], { description: "Which store to operate on: memory or scratchpad." })),
       id: Type.Optional(Type.Number({ description: "Entry id. Omit to create a new entry (upsert); required for delete." })),
       content: Type.Optional(Type.String({ description: "Memory content. Required when upserting a memory entry." })),
       title: Type.Optional(Type.String({ description: "Scratchpad title. Required when upserting a scratchpad entry." })),
@@ -93,7 +101,7 @@ Actions:
     ): Promise<AgentToolResult<{ message: string }>> => {
       const raw = params as {
         action: string;
-        store: string;
+        store?: string;
         id?: number;
         content?: string;
         title?: string;
@@ -104,7 +112,22 @@ Actions:
 
       console.log(`[stavrobot] manage_knowledge called: action=${action} store=${store} id=${raw.id}`);
 
+      if (action === "help") {
+        return {
+          content: [{ type: "text" as const, text: MANAGE_KNOWLEDGE_HELP_TEXT }],
+          details: { message: MANAGE_KNOWLEDGE_HELP_TEXT },
+        };
+      }
+
       if (action === "upsert") {
+        if (store === undefined) {
+          const errorMessage = "Error: store is required for upsert.";
+          return {
+            content: [{ type: "text" as const, text: errorMessage }],
+            details: { message: errorMessage },
+          };
+        }
+
         if (store === "memory") {
           if (raw.content === undefined || raw.content.trim() === "") {
             const errorMessage = "Error: content is required when upserting a memory entry.";
@@ -168,6 +191,14 @@ Actions:
       }
 
       if (action === "delete") {
+        if (store === undefined) {
+          const errorMessage = "Error: store is required for delete.";
+          return {
+            content: [{ type: "text" as const, text: errorMessage }],
+            details: { message: errorMessage },
+          };
+        }
+
         if (raw.id === undefined) {
           const errorMessage = "Error: id is required for delete.";
           return {
@@ -217,7 +248,7 @@ Actions:
         };
       }
 
-      const errorMessage = `Error: unknown action '${action}'. Valid actions: upsert, delete.`;
+      const errorMessage = `Error: unknown action '${action}'. Valid actions: upsert, delete, help.`;
       return {
         content: [{ type: "text" as const, text: errorMessage }],
         details: { message: errorMessage },
@@ -517,18 +548,33 @@ export function createSendTelegramMessageTool(config: TelegramConfig): AgentTool
   };
 }
 
+const MANAGE_CRON_HELP_TEXT = `manage_cron: create, update, delete, or list scheduled cron entries.
+
+Actions:
+- create: create a new cron entry. Parameters: note (required), schedule or fire_at (exactly one required).
+- update: update an existing entry. Parameters: id (required), note (optional), schedule or fire_at (optional, mutually exclusive).
+- delete: remove an entry. Parameters: id (required).
+- list: list all cron entries. Returns a JSON array of entries.
+- help: show this help text.
+
+Constraints:
+- schedule: a cron expression for recurring entries (e.g. '0 9 * * *' for daily at 9am, '*/30 * * * *' for every 30 minutes).
+- fire_at: an ISO 8601 datetime for one-shot entries (e.g. '2026-03-01T09:00:00Z'). The entry is removed after it fires.
+- schedule and fire_at are mutually exclusive.`;
+
 export function createManageCronTool(pool: pg.Pool): AgentTool {
   return {
     name: "manage_cron",
     label: "Manage cron",
-    description: "Create, update, delete, or list scheduled cron entries. Recurring entries use cron expressions (e.g. '0 9 * * *' for daily at 9am). One-shot entries use an ISO datetime.",
+    description: "Create, update, delete, or list scheduled cron entries. Use the 'help' action for details.",
     parameters: Type.Object({
       action: Type.Union([
         Type.Literal("create"),
         Type.Literal("update"),
         Type.Literal("delete"),
         Type.Literal("list"),
-      ], { description: "Action to perform: create, update, delete, or list." }),
+        Type.Literal("help"),
+      ], { description: "Action to perform: create, update, delete, list, or help." }),
       id: Type.Optional(Type.Number({ description: "Entry id. Required for update and delete." })),
       schedule: Type.Optional(Type.String({ description: "Cron expression for recurring entries (e.g. '*/30 * * * *'). Mutually exclusive with fire_at." })),
       fire_at: Type.Optional(Type.String({ description: "ISO 8601 datetime for one-shot entries (e.g. '2026-03-01T09:00:00Z'). Mutually exclusive with schedule." })),
@@ -547,6 +593,13 @@ export function createManageCronTool(pool: pg.Pool): AgentTool {
       };
 
       const action = raw.action;
+
+      if (action === "help") {
+        return {
+          content: [{ type: "text" as const, text: MANAGE_CRON_HELP_TEXT }],
+          details: { message: MANAGE_CRON_HELP_TEXT },
+        };
+      }
 
       if (action === "create") {
         if (raw.note === undefined || raw.note.trim() === "") {
@@ -641,7 +694,7 @@ export function createManageCronTool(pool: pg.Pool): AgentTool {
       }
 
       return {
-        content: [{ type: "text" as const, text: `Error: unknown action '${action}'. Valid actions: create, update, delete, list.` }],
+        content: [{ type: "text" as const, text: `Error: unknown action '${action}'. Valid actions: create, update, delete, list, help.` }],
         details: { message: `Error: unknown action '${action}'.` },
       };
     },
@@ -651,7 +704,7 @@ export function createManageCronTool(pool: pg.Pool): AgentTool {
 export async function createAgent(config: Config, pool: pg.Pool): Promise<Agent> {
   const model = getModel(config.provider as any, config.model as any);
   const messages = await loadMessages(pool);
-  const tools = [createExecuteSqlTool(pool), createManageKnowledgeTool(pool), createSendSignalMessageTool(), createManageCronTool(pool), createRunPythonTool(), createUpsertPageTool(pool), createDeletePageTool(pool), createReadUploadTool(), createDeleteUploadTool(), createSearchTool(pool), createManageFilesTool()];
+  const tools = [createExecuteSqlTool(pool), createManageKnowledgeTool(pool), createSendSignalMessageTool(), createManageCronTool(pool), createRunPythonTool(), createManagePagesTool(pool), createManageUploadsTool(), createSearchTool(pool), createManageFilesTool()];
   if (config.webSearch !== undefined) {
     tools.push(createWebSearchTool(config.webSearch));
   }
@@ -662,17 +715,11 @@ export async function createAgent(config: Config, pool: pg.Pool): Promise<Agent>
     tools.push(createTextToSpeechTool(config.tts));
   }
   tools.push(
-    createInstallPluginTool(),
-    createUpdatePluginTool(),
-    createRemovePluginTool(),
-    createConfigurePluginTool(),
-    createListPluginsTool(),
-    createShowPluginTool(),
+    createManagePluginsTool({ coderEnabled: config.coder !== undefined }),
     createRunPluginToolTool(),
   );
   if (config.coder !== undefined) {
     tools.push(
-      createCreatePluginTool(),
       createRequestCodingTaskTool(),
     );
   }
@@ -880,8 +927,8 @@ export async function handlePrompt(
         `MIME type: ${attachment.mimeType}\n` +
         `Size: ${attachment.size} bytes\n\n` +
         `If this is an image, it is already included below. Otherwise, you do not need to read it right now. ` +
-        `If you need to read it, use the read_upload tool. ` +
-        `You shouldn't need to delete it, but if you do, you can use the delete_upload tool.`;
+        `If you need to read it, use the manage_uploads tool with action "read". ` +
+        `You shouldn't need to delete it, but if you do, use manage_uploads with action "delete".`;
       resolvedMessage = resolvedMessage !== undefined ? `${resolvedMessage}\n\n${notification}` : notification;
 
       if (isImage) {

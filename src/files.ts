@@ -32,7 +32,7 @@ export function createManageFilesTool(): AgentTool {
   return {
     name: "manage_files",
     label: "Manage files",
-    description: "Manage files in a temporary directory. Use the 'help' action for details.",
+    description: "Create and manage temporary files. Use the 'help' action for details.",
     parameters: Type.Object({
       action: Type.Union([
         Type.Literal("write"),

@@ -8,6 +8,20 @@ import { UPLOADS_DIR } from "./uploads.js";
 const IMAGE_EXTENSIONS = new Set([".jpg", ".jpeg", ".png", ".gif", ".webp"]);
 const TEXT_EXTENSIONS = new Set([".txt", ".md", ".csv", ".json", ".xml", ".html", ".css", ".js", ".ts", ".py", ".sh", ".yml", ".yaml", ".toml", ".ini", ".cfg", ".log", ".sql", ".env"]);
 
+const MANAGE_UPLOADS_HELP_TEXT = `manage_uploads: read or delete uploaded files.
+
+Actions:
+- read: read the contents of an uploaded file. Parameters: path (required).
+  - Text files (txt, md, csv, json, xml, html, css, js, ts, py, sh, yml, yaml, toml, ini, cfg, log, sql, env) and files with no extension are returned as text.
+  - Images (jpg, jpeg, png, gif, webp) are returned as image content for visual inspection.
+  - Other binary formats (e.g. pdf, zip) cannot be read directly.
+- delete: delete an uploaded file. Parameters: path (required).
+- help: show this help text.
+
+Constraints:
+- The path must be the full path to the file inside ${UPLOADS_DIR}.
+- Files must be inside the uploads directory; paths outside it are rejected.`;
+
 function inferMimeType(extension: string): string {
   switch (extension) {
     case ".jpg":
@@ -34,140 +48,168 @@ function validatePath(filePath: string): string | null {
   return null;
 }
 
-export function createReadUploadTool(): AgentTool {
+export function createManageUploadsTool(): AgentTool {
   return {
-    name: "read_upload",
-    label: "Read upload",
-    description: "Read the contents of an uploaded file by its full path. Text files are returned as text. Images (jpg, jpeg, png, gif, webp) are returned as image content for visual inspection. Other binary formats (e.g. pdf, zip) cannot be read directly.",
+    name: "manage_uploads",
+    label: "Manage uploads",
+    description: "Read or delete uploaded files. Use the 'help' action for details.",
     parameters: Type.Object({
-      path: Type.String({ description: "The full path to the uploaded file, e.g. /tmp/uploads/upload-abc123.txt." }),
+      action: Type.Union([
+        Type.Literal("read"),
+        Type.Literal("delete"),
+        Type.Literal("help"),
+      ], { description: "Action to perform: read, delete, or help." }),
+      path: Type.Optional(Type.String({ description: "The full path to the uploaded file, e.g. /tmp/uploads/upload-abc123.txt. Required for read and delete." })),
     }),
     execute: async (
       toolCallId: string,
       params: unknown
     ): Promise<AgentToolResult<{ message: string }>> => {
-      const { path: filePath } = params as { path: string };
-
-      console.log("[stavrobot] read_upload called:", filePath);
-
-      const validationError = validatePath(filePath);
-      if (validationError !== null) {
-        console.warn("[stavrobot] read_upload validation failed:", validationError);
-        return {
-          content: [{ type: "text" as const, text: validationError }],
-          details: { message: validationError },
-        };
-      }
-
-      const extension = path.extname(filePath).toLowerCase();
-
-      if (IMAGE_EXTENSIONS.has(extension)) {
-        console.log("[stavrobot] read_upload: classified as image:", extension);
-        let buffer: Buffer;
-        try {
-          buffer = await fs.readFile(filePath);
-        } catch (error) {
-          const isNotFound = error instanceof Error && "code" in error && (error as NodeJS.ErrnoException).code === "ENOENT";
-          if (!isNotFound) {
-            throw error;
-          }
-          const message = `File not found: ${filePath}`;
-          console.warn("[stavrobot] read_upload error:", message);
-          return {
-            content: [{ type: "text" as const, text: message }],
-            details: { message },
-          };
-        }
-        const base64Data = buffer.toString("base64");
-        const mimeType = inferMimeType(extension);
-        const imageContent: ImageContent = { type: "image", data: base64Data, mimeType };
-        console.log("[stavrobot] read_upload result: read image", buffer.length, "bytes from", filePath);
-        return {
-          content: [imageContent],
-          details: { message: `Read image (${mimeType}) of ${buffer.length} bytes from ${filePath}.` },
-        };
-      }
-
-      if (TEXT_EXTENSIONS.has(extension) || extension === "") {
-        console.log("[stavrobot] read_upload: classified as text:", extension || "(no extension)");
-        let contents: string;
-        try {
-          contents = await fs.readFile(filePath, "utf-8");
-        } catch (error) {
-          const isNotFound = error instanceof Error && "code" in error && (error as NodeJS.ErrnoException).code === "ENOENT";
-          if (!isNotFound) {
-            throw error;
-          }
-          const message = `File not found: ${filePath}`;
-          console.warn("[stavrobot] read_upload error:", message);
-          return {
-            content: [{ type: "text" as const, text: message }],
-            details: { message },
-          };
-        }
-        console.log("[stavrobot] read_upload result: read", contents.length, "characters from", filePath);
-        return {
-          content: [{ type: "text" as const, text: contents }],
-          details: { message: `Read ${contents.length} characters from ${filePath}.` },
-        };
-      }
-
-      const message = `Cannot read binary file directly. The file is stored at ${filePath} with type ${extension}.`;
-      console.log("[stavrobot] read_upload: classified as unsupported binary:", extension);
-      return {
-        content: [{ type: "text" as const, text: message }],
-        details: { message },
+      const raw = params as {
+        action: string;
+        path?: string;
       };
-    },
-  };
-}
 
-export function createDeleteUploadTool(): AgentTool {
-  return {
-    name: "delete_upload",
-    label: "Delete upload",
-    description: "Delete an uploaded file by its full path.",
-    parameters: Type.Object({
-      path: Type.String({ description: "The full path to the uploaded file, e.g. /tmp/uploads/upload-abc123.txt." }),
-    }),
-    execute: async (
-      toolCallId: string,
-      params: unknown
-    ): Promise<AgentToolResult<{ message: string }>> => {
-      const { path: filePath } = params as { path: string };
+      const action = raw.action;
 
-      console.log("[stavrobot] delete_upload called:", filePath);
+      console.log(`[stavrobot] manage_uploads called: action=${action} path=${raw.path}`);
 
-      const validationError = validatePath(filePath);
-      if (validationError !== null) {
-        console.warn("[stavrobot] delete_upload validation failed:", validationError);
+      if (action === "help") {
         return {
-          content: [{ type: "text" as const, text: validationError }],
-          details: { message: validationError },
+          content: [{ type: "text" as const, text: MANAGE_UPLOADS_HELP_TEXT }],
+          details: { message: MANAGE_UPLOADS_HELP_TEXT },
         };
       }
 
-      try {
-        await fs.unlink(filePath);
-      } catch (error) {
-        const isNotFound = error instanceof Error && "code" in error && (error as NodeJS.ErrnoException).code === "ENOENT";
-        if (!isNotFound) {
-          throw error;
+      if (action === "read") {
+        if (raw.path === undefined || raw.path.trim() === "") {
+          const errorMessage = "Error: path is required for read.";
+          return {
+            content: [{ type: "text" as const, text: errorMessage }],
+            details: { message: errorMessage },
+          };
         }
-        const message = `File not found: ${filePath}`;
-        console.warn("[stavrobot] delete_upload error:", message);
+
+        const filePath = raw.path;
+
+        const validationError = validatePath(filePath);
+        if (validationError !== null) {
+          console.warn("[stavrobot] manage_uploads read validation failed:", validationError);
+          return {
+            content: [{ type: "text" as const, text: validationError }],
+            details: { message: validationError },
+          };
+        }
+
+        const extension = path.extname(filePath).toLowerCase();
+
+        if (IMAGE_EXTENSIONS.has(extension)) {
+          console.log("[stavrobot] manage_uploads read: classified as image:", extension);
+          let buffer: Buffer;
+          try {
+            buffer = await fs.readFile(filePath);
+          } catch (error) {
+            const isNotFound = error instanceof Error && "code" in error && (error as NodeJS.ErrnoException).code === "ENOENT";
+            if (!isNotFound) {
+              throw error;
+            }
+            const message = `File not found: ${filePath}`;
+            console.warn("[stavrobot] manage_uploads read error:", message);
+            return {
+              content: [{ type: "text" as const, text: message }],
+              details: { message },
+            };
+          }
+          const base64Data = buffer.toString("base64");
+          const mimeType = inferMimeType(extension);
+          const imageContent: ImageContent = { type: "image", data: base64Data, mimeType };
+          console.log("[stavrobot] manage_uploads read result: read image", buffer.length, "bytes from", filePath);
+          return {
+            content: [imageContent],
+            details: { message: `Read image (${mimeType}) of ${buffer.length} bytes from ${filePath}.` },
+          };
+        }
+
+        if (TEXT_EXTENSIONS.has(extension) || extension === "") {
+          console.log("[stavrobot] manage_uploads read: classified as text:", extension || "(no extension)");
+          let contents: string;
+          try {
+            contents = await fs.readFile(filePath, "utf-8");
+          } catch (error) {
+            const isNotFound = error instanceof Error && "code" in error && (error as NodeJS.ErrnoException).code === "ENOENT";
+            if (!isNotFound) {
+              throw error;
+            }
+            const message = `File not found: ${filePath}`;
+            console.warn("[stavrobot] manage_uploads read error:", message);
+            return {
+              content: [{ type: "text" as const, text: message }],
+              details: { message },
+            };
+          }
+          console.log("[stavrobot] manage_uploads read result: read", contents.length, "characters from", filePath);
+          return {
+            content: [{ type: "text" as const, text: contents }],
+            details: { message: `Read ${contents.length} characters from ${filePath}.` },
+          };
+        }
+
+        const message = `Cannot read binary file directly. The file is stored at ${filePath} with type ${extension}.`;
+        console.log("[stavrobot] manage_uploads read: classified as unsupported binary:", extension);
         return {
           content: [{ type: "text" as const, text: message }],
           details: { message },
         };
       }
 
-      const message = `File deleted: ${filePath}`;
-      console.log("[stavrobot] delete_upload result:", message);
+      if (action === "delete") {
+        if (raw.path === undefined || raw.path.trim() === "") {
+          const errorMessage = "Error: path is required for delete.";
+          return {
+            content: [{ type: "text" as const, text: errorMessage }],
+            details: { message: errorMessage },
+          };
+        }
 
+        const filePath = raw.path;
+
+        const validationError = validatePath(filePath);
+        if (validationError !== null) {
+          console.warn("[stavrobot] manage_uploads delete validation failed:", validationError);
+          return {
+            content: [{ type: "text" as const, text: validationError }],
+            details: { message: validationError },
+          };
+        }
+
+        try {
+          await fs.unlink(filePath);
+        } catch (error) {
+          const isNotFound = error instanceof Error && "code" in error && (error as NodeJS.ErrnoException).code === "ENOENT";
+          if (!isNotFound) {
+            throw error;
+          }
+          const message = `File not found: ${filePath}`;
+          console.warn("[stavrobot] manage_uploads delete error:", message);
+          return {
+            content: [{ type: "text" as const, text: message }],
+            details: { message },
+          };
+        }
+
+        const message = `File deleted: ${filePath}`;
+        console.log("[stavrobot] manage_uploads delete result:", message);
+
+        return {
+          content: [{ type: "text" as const, text: message }],
+          details: { message },
+        };
+      }
+
+      const errorMessage = `Error: unknown action '${action}'. Valid actions: read, delete, help.`;
       return {
-        content: [{ type: "text" as const, text: message }],
-        details: { message },
+        content: [{ type: "text" as const, text: errorMessage }],
+        details: { message: errorMessage },
       };
     },
   };

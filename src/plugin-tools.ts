@@ -79,181 +79,250 @@ function formatInitResponse(responseText: string): string {
   return message;
 }
 
-export function createInstallPluginTool(): AgentTool {
-  return {
-    name: "install_plugin",
-    label: "Install plugin",
-    description: "Install a plugin from a git repository URL. Returns the plugin manifest and any configuration requirements.",
-    parameters: Type.Object({
-      url: Type.String({ description: "The git repository URL to clone." }),
-    }),
-    execute: async (
-      toolCallId: string,
-      params: unknown,
-    ): Promise<AgentToolResult<{ result: string }>> => {
-      const { url } = params as { url: string };
-      console.log("[stavrobot] install_plugin called:", url);
-      const response = await fetch(`${PLUGIN_RUNNER_BASE_URL}/install`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url }),
-      });
-      const responseText = await response.text();
-      console.log("[stavrobot] install_plugin result:", responseText.length, "characters");
-      const result = formatInitResponse(responseText);
-      return {
-        content: [{ type: "text" as const, text: result }],
-        details: { result },
-      };
-    },
-  };
-}
+const MANAGE_PLUGINS_HELP_TEXT = `manage_plugins: install, update, remove, configure, list, show, or create plugins.
 
-export function createUpdatePluginTool(): AgentTool {
-  return {
-    name: "update_plugin",
-    label: "Update plugin",
-    description: "Update an installed plugin to the latest version from its git repository.",
-    parameters: Type.Object({
-      name: Type.String({ description: "The plugin name." }),
-    }),
-    execute: async (
-      toolCallId: string,
-      params: unknown,
-    ): Promise<AgentToolResult<{ result: string }>> => {
-      const { name } = params as { name: string };
-      console.log("[stavrobot] update_plugin called:", name);
-      const response = await fetch(`${PLUGIN_RUNNER_BASE_URL}/update`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name }),
-      });
-      const responseText = await response.text();
-      console.log("[stavrobot] update_plugin result:", responseText.length, "characters");
-      const result = formatInitResponse(responseText);
-      return {
-        content: [{ type: "text" as const, text: result }],
-        details: { result },
-      };
-    },
-  };
-}
+Actions:
+- install: install a plugin from a git URL. Parameters: url (required).
+- update: update an installed plugin to the latest version from its git repository. Parameters: name (required).
+- remove: remove an installed plugin. Parameters: name (required).
+- configure: set configuration values for a plugin. The config keys must match what the plugin's manifest declares. Parameters: name (required), config (required, JSON string).
+- list: list all installed plugins. No additional parameters.
+- show: show all tools in a plugin, including their names, descriptions, and parameter schemas. Parameters: name (required).
+- create: create a new empty editable plugin. Parameters: name (required), plugin_description (required). Only available when the coder is configured.
+- help: show this help text.`;
 
-export function createRemovePluginTool(): AgentTool {
+export function createManagePluginsTool(options: { coderEnabled: boolean }): AgentTool {
   return {
-    name: "remove_plugin",
-    label: "Remove plugin",
-    description: "Remove an installed plugin.",
+    name: "manage_plugins",
+    label: "Manage plugins",
+    description: "Install, update, remove, configure, list, show, or create plugins. Use the 'help' action for details.",
     parameters: Type.Object({
-      name: Type.String({ description: "The plugin name." }),
+      action: Type.Union([
+        Type.Literal("install"),
+        Type.Literal("update"),
+        Type.Literal("remove"),
+        Type.Literal("configure"),
+        Type.Literal("list"),
+        Type.Literal("show"),
+        Type.Literal("create"),
+        Type.Literal("help"),
+      ], { description: "Action to perform: install, update, remove, configure, list, show, create, or help." }),
+      name: Type.Optional(Type.String({ description: "The plugin name. Required for update, remove, configure, show, and create." })),
+      url: Type.Optional(Type.String({ description: "The git repository URL to clone. Required for install." })),
+      config: Type.Optional(Type.String({ description: "JSON string of configuration values to set. Required for configure." })),
+      plugin_description: Type.Optional(Type.String({ description: "A short description of what the plugin does. Required for create." })),
     }),
     execute: async (
       toolCallId: string,
       params: unknown,
     ): Promise<AgentToolResult<{ result: string }>> => {
-      const { name } = params as { name: string };
-      console.log("[stavrobot] remove_plugin called:", name);
-      const response = await fetch(`${PLUGIN_RUNNER_BASE_URL}/remove`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name }),
-      });
-      const result = await response.text();
-      console.log("[stavrobot] remove_plugin result:", result.length, "characters");
-      return {
-        content: [{ type: "text" as const, text: result }],
-        details: { result },
+      const raw = params as {
+        action: string;
+        name?: string;
+        url?: string;
+        config?: string;
+        plugin_description?: string;
       };
-    },
-  };
-}
 
-export function createConfigurePluginTool(): AgentTool {
-  return {
-    name: "configure_plugin",
-    label: "Configure plugin",
-    description: "Set configuration values for a plugin. The config keys must match what the plugin's manifest declares. Pass the config as a JSON string.",
-    parameters: Type.Object({
-      name: Type.String({ description: "The plugin name." }),
-      config: Type.String({ description: "JSON string of configuration values to set." }),
-    }),
-    execute: async (
-      toolCallId: string,
-      params: unknown,
-    ): Promise<AgentToolResult<{ result: string }>> => {
-      const { name, config } = params as { name: string; config: string };
-      console.log("[stavrobot] configure_plugin called: name:", name, "config:", config);
-      let parsedConfig: unknown;
-      try {
-        parsedConfig = JSON.parse(config);
-      } catch {
-        const result = "Error: config is not valid JSON.";
+      const action = raw.action;
+
+      console.log(`[stavrobot] manage_plugins called: action=${action} name=${raw.name}`);
+
+      if (action === "help") {
+        return {
+          content: [{ type: "text" as const, text: MANAGE_PLUGINS_HELP_TEXT }],
+          details: { result: MANAGE_PLUGINS_HELP_TEXT },
+        };
+      }
+
+      if (action === "install") {
+        if (raw.url === undefined || raw.url.trim() === "") {
+          const result = "Error: url is required for install.";
+          return {
+            content: [{ type: "text" as const, text: result }],
+            details: { result },
+          };
+        }
+        const url = raw.url;
+        console.log("[stavrobot] manage_plugins install called:", url);
+        const response = await fetch(`${PLUGIN_RUNNER_BASE_URL}/install`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ url }),
+        });
+        const responseText = await response.text();
+        console.log("[stavrobot] manage_plugins install result:", responseText.length, "characters");
+        const result = formatInitResponse(responseText);
         return {
           content: [{ type: "text" as const, text: result }],
           details: { result },
         };
       }
-      const response = await fetch(`${PLUGIN_RUNNER_BASE_URL}/configure`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name, config: parsedConfig }),
-      });
-      const result = await response.text();
-      console.log("[stavrobot] configure_plugin result:", result.length, "characters");
-      return {
-        content: [{ type: "text" as const, text: result }],
-        details: { result },
-      };
-    },
-  };
-}
 
-export function createListPluginsTool(): AgentTool {
-  return {
-    name: "list_plugins",
-    label: "List plugins",
-    description: "List all installed plugins. Returns plugin names and descriptions.",
-    parameters: Type.Object({}),
-    execute: async (
-      toolCallId: string,
-      params: unknown,
-    ): Promise<AgentToolResult<{ result: string }>> => {
-      console.log("[stavrobot] list_plugins called");
-      const response = await fetch(`${PLUGIN_RUNNER_BASE_URL}/bundles`);
-      const result = await response.text();
-      console.log("[stavrobot] list_plugins result:", result.length, "characters");
-      return {
-        content: [{ type: "text" as const, text: result }],
-        details: { result },
-      };
-    },
-  };
-}
-
-export function createShowPluginTool(): AgentTool {
-  return {
-    name: "show_plugin",
-    label: "Show plugin",
-    description: "Show all tools in a plugin, including their names, descriptions, and parameter schemas.",
-    parameters: Type.Object({
-      name: Type.String({ description: "The plugin name." }),
-    }),
-    execute: async (
-      toolCallId: string,
-      params: unknown,
-    ): Promise<AgentToolResult<{ result: string }>> => {
-      const { name } = params as { name: string };
-      console.log("[stavrobot] show_plugin called:", name);
-      const response = await fetch(`${PLUGIN_RUNNER_BASE_URL}/bundles/${name}`);
-      if (response.status === 404) {
-        const result = `Plugin '${name}' not found.`;
+      if (action === "update") {
+        if (raw.name === undefined || raw.name.trim() === "") {
+          const result = "Error: name is required for update.";
+          return {
+            content: [{ type: "text" as const, text: result }],
+            details: { result },
+          };
+        }
+        const name = raw.name;
+        console.log("[stavrobot] manage_plugins update called:", name);
+        const response = await fetch(`${PLUGIN_RUNNER_BASE_URL}/update`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name }),
+        });
+        const responseText = await response.text();
+        console.log("[stavrobot] manage_plugins update result:", responseText.length, "characters");
+        const result = formatInitResponse(responseText);
         return {
           content: [{ type: "text" as const, text: result }],
           details: { result },
         };
       }
-      const result = await response.text();
-      console.log("[stavrobot] show_plugin result:", result.length, "characters");
+
+      if (action === "remove") {
+        if (raw.name === undefined || raw.name.trim() === "") {
+          const result = "Error: name is required for remove.";
+          return {
+            content: [{ type: "text" as const, text: result }],
+            details: { result },
+          };
+        }
+        const name = raw.name;
+        console.log("[stavrobot] manage_plugins remove called:", name);
+        const response = await fetch(`${PLUGIN_RUNNER_BASE_URL}/remove`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name }),
+        });
+        const result = await response.text();
+        console.log("[stavrobot] manage_plugins remove result:", result.length, "characters");
+        return {
+          content: [{ type: "text" as const, text: result }],
+          details: { result },
+        };
+      }
+
+      if (action === "configure") {
+        if (raw.name === undefined || raw.name.trim() === "") {
+          const result = "Error: name is required for configure.";
+          return {
+            content: [{ type: "text" as const, text: result }],
+            details: { result },
+          };
+        }
+        if (raw.config === undefined || raw.config.trim() === "") {
+          const result = "Error: config is required for configure.";
+          return {
+            content: [{ type: "text" as const, text: result }],
+            details: { result },
+          };
+        }
+        const name = raw.name;
+        const config = raw.config;
+        console.log("[stavrobot] manage_plugins configure called: name:", name, "config:", config);
+        let parsedConfig: unknown;
+        try {
+          parsedConfig = JSON.parse(config);
+        } catch {
+          const result = "Error: config is not valid JSON.";
+          return {
+            content: [{ type: "text" as const, text: result }],
+            details: { result },
+          };
+        }
+        const response = await fetch(`${PLUGIN_RUNNER_BASE_URL}/configure`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name, config: parsedConfig }),
+        });
+        const result = await response.text();
+        console.log("[stavrobot] manage_plugins configure result:", result.length, "characters");
+        return {
+          content: [{ type: "text" as const, text: result }],
+          details: { result },
+        };
+      }
+
+      if (action === "list") {
+        console.log("[stavrobot] manage_plugins list called");
+        const response = await fetch(`${PLUGIN_RUNNER_BASE_URL}/bundles`);
+        const result = await response.text();
+        console.log("[stavrobot] manage_plugins list result:", result.length, "characters");
+        return {
+          content: [{ type: "text" as const, text: result }],
+          details: { result },
+        };
+      }
+
+      if (action === "show") {
+        if (raw.name === undefined || raw.name.trim() === "") {
+          const result = "Error: name is required for show.";
+          return {
+            content: [{ type: "text" as const, text: result }],
+            details: { result },
+          };
+        }
+        const name = raw.name;
+        console.log("[stavrobot] manage_plugins show called:", name);
+        const response = await fetch(`${PLUGIN_RUNNER_BASE_URL}/bundles/${name}`);
+        if (response.status === 404) {
+          const result = `Plugin '${name}' not found.`;
+          return {
+            content: [{ type: "text" as const, text: result }],
+            details: { result },
+          };
+        }
+        const result = await response.text();
+        console.log("[stavrobot] manage_plugins show result:", result.length, "characters");
+        return {
+          content: [{ type: "text" as const, text: result }],
+          details: { result },
+        };
+      }
+
+      if (action === "create") {
+        if (!options.coderEnabled) {
+          const result = "Error: the create action requires the coder to be configured.";
+          return {
+            content: [{ type: "text" as const, text: result }],
+            details: { result },
+          };
+        }
+        if (raw.name === undefined || raw.name.trim() === "") {
+          const result = "Error: name is required for create.";
+          return {
+            content: [{ type: "text" as const, text: result }],
+            details: { result },
+          };
+        }
+        if (raw.plugin_description === undefined || raw.plugin_description.trim() === "") {
+          const result = "Error: plugin_description is required for create.";
+          return {
+            content: [{ type: "text" as const, text: result }],
+            details: { result },
+          };
+        }
+        const name = raw.name;
+        const description = raw.plugin_description;
+        console.log("[stavrobot] manage_plugins create called: name:", name);
+        const response = await fetch(`${PLUGIN_RUNNER_BASE_URL}/create`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name, description }),
+        });
+        const result = await response.text();
+        console.log("[stavrobot] manage_plugins create result:", result.length, "characters");
+        return {
+          content: [{ type: "text" as const, text: result }],
+          details: { result },
+        };
+      }
+
+      const result = `Error: unknown action '${action}'. Valid actions: install, update, remove, configure, list, show, create, help.`;
       return {
         content: [{ type: "text" as const, text: result }],
         details: { result },
@@ -266,7 +335,7 @@ export function createRunPluginToolTool(): AgentTool {
   return {
     name: "run_plugin_tool",
     label: "Run plugin tool",
-    description: "Run a tool from an installed plugin with the given parameters. The parameters must match the tool's schema as shown by show_plugin.",
+    description: "Run a tool from an installed plugin with the given parameters. The parameters must match the tool's schema as shown by manage_plugins (action: show).",
     parameters: Type.Object({
       plugin: Type.String({ description: "The plugin name." }),
       tool: Type.String({ description: "The tool name." }),
@@ -287,36 +356,6 @@ export function createRunPluginToolTool(): AgentTool {
       const responseText = await response.text();
       console.log("[stavrobot] run_plugin_tool result:", responseText.length, "characters");
       const result = formatRunPluginToolResult(plugin, tool, responseText, response.status);
-      return {
-        content: [{ type: "text" as const, text: result }],
-        details: { result },
-      };
-    },
-  };
-}
-
-export function createCreatePluginTool(): AgentTool {
-  return {
-    name: "create_plugin",
-    label: "Create plugin",
-    description: "Create a new empty plugin with the given name and description. The plugin will be locally editable and can be populated with tools by the coding agent via request_coding_task.",
-    parameters: Type.Object({
-      name: Type.String({ description: "The plugin name (used as the directory name and identifier)." }),
-      description: Type.String({ description: "A short description of what the plugin does." }),
-    }),
-    execute: async (
-      toolCallId: string,
-      params: unknown,
-    ): Promise<AgentToolResult<{ result: string }>> => {
-      const { name, description } = params as { name: string; description: string };
-      console.log("[stavrobot] create_plugin called: name:", name);
-      const response = await fetch(`${PLUGIN_RUNNER_BASE_URL}/create`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name, description }),
-      });
-      const result = await response.text();
-      console.log("[stavrobot] create_plugin result:", result.length, "characters");
       return {
         content: [{ type: "text" as const, text: result }],
         details: { result },
@@ -347,7 +386,7 @@ export function createRequestCodingTaskTool(): AgentTool {
 
       const bundleResponse = await fetch(`${PLUGIN_RUNNER_BASE_URL}/bundles/${plugin}`);
       if (bundleResponse.status === 404) {
-        const result = `Plugin '${plugin}' not found. Create it first with create_plugin.`;
+        const result = `Plugin '${plugin}' not found. Create it first with manage_plugins (action: create).`;
         return {
           content: [{ type: "text" as const, text: result }],
           details: { result },
