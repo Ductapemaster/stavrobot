@@ -109,6 +109,24 @@ as prose.
 The bot will usually know well enough what to use when, but sometimes you will want to
 tell it explicitly what information to put where.
 
+## Skills
+
+Skills are plain-text instruction files that teach the bot new capabilities — things like
+creating tables, storing knowledge, making pages, or following specific workflows. They
+are not code; they are natural-language instructions the bot reads and follows.
+
+To install the skill system, tell the bot to fetch
+`https://stavrobot.stavros.io/bootstrap.md` and follow its instructions.
+
+A full list of available skills is at
+`https://stavrobot.stavros.io/skills/index.md`. To install a skill, just tell the bot to
+fetch and install it from that URL. The bot will show you what the skill does and ask for
+confirmation before proceeding.
+
+To contribute a skill, add a markdown file to `misc/skills/` in this repo. Each skill
+file has YAML front matter with `title`, `description`, `version`, and an optional
+`author`, followed by the plain-language instructions in the body. Submit a PR.
+
 ## How to make your own plugin
 
 See [PLUGIN.md](coder/PLUGIN.md) for everything you need to know to create a Stavrobot plugin. The same document works as a reference for both humans and LLMs.
