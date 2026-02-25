@@ -14,7 +14,7 @@ This guide covers everything you need to write a complete skill from scratch.
 
 Skill files live in `skills/` on the `pages` branch of this repo and are named with
 short, descriptive, kebab-case names (e.g. `gym.md`, `meal-planning.md`, `finance.md`).
-The bootstrap file lives at the root of the `pages` branch as `bootstrap.md`.
+The bootstrap file lives in `skills/` as `skills/bootstrap.md`, like every other skill.
 
 Every skill file has two parts: a YAML front matter block and a body.
 
@@ -47,7 +47,7 @@ The last step must always record the skill in the `skills` table (see
 [Recording the skill](#recording-the-skill) below).
 
 See `skills/gym.md` on the `pages` branch for a complete example of a domain skill, and
-`bootstrap.md` for the bootstrap skill that sets up the skill system itself.
+`skills/bootstrap.md` for the bootstrap skill that sets up the skill system itself.
 
 ---
 
@@ -300,7 +300,7 @@ Insert a row into the `skills` table for this skill:
 - `version`: the version from the front matter of this file
 ```
 
-The `skills` table is created by the bootstrap skill (`bootstrap.md`). It has
+The `skills` table is created by the bootstrap skill (`skills/bootstrap.md`). It has
 columns: `name` (text, primary key), `url` (text), `content` (text), `version`
 (integer), `installed_at` (timestamp), `updated_at` (timestamp).
 
@@ -366,6 +366,6 @@ scratchpad.
    `output/skills/index.md`.
 3. Submit a pull request.
 
-Do not modify `bootstrap.md` unless you are changing the skill system itself.
+Do not modify `skills/bootstrap.md` unless you are changing the skill system itself.
 The bootstrap file is special: it sets up the `skills` table and teaches the bot the
 installation and upgrade workflow. Changes to it affect every skill.
