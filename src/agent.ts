@@ -38,6 +38,8 @@ let compactionInProgress = false;
 // in-memory state reflects the compacted history.
 let compactionCompleted = false;
 
+const COMPACTION_DEBUG = process.env.COMPACTION_DEBUG === "1";
+
 export function createExecuteSqlTool(pool: pg.Pool): AgentTool {
   return {
     name: "execute_sql",
@@ -849,6 +851,18 @@ export async function handlePrompt(
     agent.replaceMessages(reloadedMessages);
     compactionCompleted = false;
     console.log(`[stavrobot] Reloaded ${reloadedMessages.length} messages after background compaction.`);
+    if (COMPACTION_DEBUG) {
+      console.log("[stavrobot] [compaction-debug] Reloaded messages:");
+      for (let i = 0; i < reloadedMessages.length; i++) {
+        const message = reloadedMessages[i];
+        const textPreview = typeof message.content === "string"
+          ? message.content.slice(0, 200)
+          : Array.isArray(message.content)
+            ? message.content.filter((block): block is TextContent => block.type === "text").map((block) => block.text).join("").slice(0, 200)
+            : "";
+        console.log(`[stavrobot] [compaction-debug]   [${i}] role=${message.role} text=${textPreview}`);
+      }
+    }
   }
 
   const memories = await loadAllMemories(pool);
@@ -1013,6 +1027,20 @@ export async function handlePrompt(
     // Snapshot the messages now so the background task works on a stable slice
     // and never touches agent.state.messages directly.
     const currentMessages = agent.state.messages.slice();
+
+    if (COMPACTION_DEBUG) {
+      console.log(`[stavrobot] [compaction-debug] Compaction triggered: ${currentMessages.length} messages in memory`);
+      for (let i = 0; i < currentMessages.length; i++) {
+        const message = currentMessages[i];
+        const textPreview = typeof message.content === "string"
+          ? message.content.slice(0, 200)
+          : Array.isArray(message.content)
+            ? message.content.filter((block): block is TextContent => block.type === "text").map((block) => block.text).join("").slice(0, 200)
+            : "";
+        console.log(`[stavrobot] [compaction-debug]   [${i}] role=${message.role} text=${textPreview}`);
+      }
+    }
+
     void (async () => {
       try {
         // Advance the cut point to the next user message. A user message is always a
@@ -1034,7 +1062,19 @@ export async function handlePrompt(
         const messagesToCompact = currentMessages.slice(0, cutIndex);
         const messagesToKeep = currentMessages.slice(cutIndex);
 
+        if (COMPACTION_DEBUG) {
+          console.log(`[stavrobot] [compaction-debug] Cut point: index=${cutIndex}, compacting=${messagesToCompact.length}, keeping=${messagesToKeep.length}`);
+          console.log(`[stavrobot] [compaction-debug] Last compacted message: role=${messagesToCompact[messagesToCompact.length - 1].role}`);
+          console.log(`[stavrobot] [compaction-debug] First kept message: role=${messagesToKeep[0].role}`);
+        }
+
         const serializedMessages = serializeMessagesForSummary(messagesToCompact);
+
+        if (COMPACTION_DEBUG) {
+          console.log(`[stavrobot] [compaction-debug] Serialized input for summarizer (${serializedMessages.length} chars):`);
+          console.log(serializedMessages);
+        }
+
         const summarySystemPrompt = "Summarize the following conversation concisely. Preserve all important facts, decisions, user preferences, and context. The summary will replace these messages in the conversation history.";
 
         const apiKey = await getApiKey(config);
@@ -1058,6 +1098,11 @@ export async function handlePrompt(
           .map((block) => block.text)
           .join("");
 
+        if (COMPACTION_DEBUG) {
+          console.log(`[stavrobot] [compaction-debug] Summary output (${summaryText.length} chars):`);
+          console.log(summaryText);
+        }
+
         const previousCompaction = await loadLatestCompaction(pool);
         const previousBoundary = previousCompaction ? previousCompaction.upToMessageId : 0;
 
@@ -1074,6 +1119,10 @@ export async function handlePrompt(
           return;
         }
         const upToMessageId = cutoffResult.rows[0].id as number;
+
+        if (COMPACTION_DEBUG) {
+          console.log(`[stavrobot] [compaction-debug] Boundary: previousBoundary=${previousBoundary}, keepCount=${keepCount}, upToMessageId=${upToMessageId}`);
+        }
 
         await saveCompaction(pool, summaryText, upToMessageId);
         console.log(`[stavrobot] Background compaction complete: compacted ${messagesToCompact.length} messages, kept ${messagesToKeep.length}.`);
