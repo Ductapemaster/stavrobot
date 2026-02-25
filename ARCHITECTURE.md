@@ -10,7 +10,7 @@ All messages flow through a single `POST /chat` endpoint on the main app. The ag
 
 ## Containers
 
-Seven containers are defined in `docker-compose.yml`. The signal-bridge is behind a Docker Compose profile and only starts when explicitly enabled.
+Eight containers are defined in `docker-compose.yml`. The signal-bridge is behind a Docker Compose profile and only starts when explicitly enabled. The ngrok container is also behind a Docker Compose profile and is only needed when a dynamic public URL is required (e.g., for Telegram webhooks in development or on servers without a static hostname).
 
 ### app (port 3000 external, 3001 internal)
 
@@ -63,6 +63,14 @@ A Python script that bridges Signal messages to the agent. Only starts when the 
 - **Outbound:** Exposes `POST /send` on port 8081 for the app's `send_signal_message` tool to call. Converts markdown to Signal text styles. Supports text and file attachments.
 
 Mounts: `./data/main/config.toml:/app/config.toml:ro`, `./data/signal-cli:/root/.local/share/signal-cli`.
+
+### ngrok
+
+An optional container using the official `ngrok/ngrok` image that exposes the app's port 3000 via a public HTTPS tunnel. Only starts when the `ngrok` Docker Compose profile is enabled. Requires `NGROK_AUTHTOKEN` to be set in the environment.
+
+On startup, if `[ngrok]` is configured in `config.toml`, the app polls ngrok's local management API (`http://ngrok:4040/api/tunnels`) with retries until an HTTPS tunnel is available. The discovered public URL is used as `publicHostname` for Telegram webhook registration and the agent system prompt. `publicHostname` in `config.toml` may be omitted when `[ngrok]` is configured.
+
+No volume mounts.
 
 ### pg-backup
 
@@ -345,11 +353,10 @@ The LLM agent can write config via `configure_plugin` but can never read config 
 Runtime configuration is loaded from `config.toml` (or the path in `CONFIG_PATH` env var). The file is gitignored; `config.example.toml` is the template.
 
 ### Required fields
-
-- `provider` — LLM provider (e.g., `"anthropic"`). Not required when `[lmstudio]` is configured.
-- `model` — Model name. Not required when `[lmstudio]` is configured.
-- `publicHostname` — Public HTTPS URL (no trailing slash).
-- Either `apiKey` or `authFile` (mutually exclusive). Not required when `[lmstudio]` is configured.
+- `provider` — LLM provider (e.g., `"anthropic"`). Not required if `[lmstudio]` is configured.
+- `model` — Model name. Not required if `[lmstudio]` is configured.
+- `publicHostname` — Public HTTPS URL (no trailing slash). Required unless `[ngrok]` is configured.
+- Either `apiKey` or `authFile` (mutually exclusive). Not required if `[lmstudio]` is configured.
 
 ### Optional fields
 
@@ -363,6 +370,7 @@ Runtime configuration is loaded from `config.toml` (or the path in `CONFIG_PATH`
 - `[coder]` — Self-programming agent (Claude Code model alias).
 - `[telegram]` — Telegram bot integration.
 - `[signal]` — Signal integration (read by signal-bridge, not the app).
+- `[ngrok]` — Dynamic public URL via ngrok. When present, the app queries the ngrok container's local API at startup to discover the tunnel URL. `publicHostname` may be omitted. Optional `apiUrl` overrides the default `http://ngrok:4040`.
 
 ## File structure
 
@@ -379,6 +387,7 @@ src/
   telegram.ts       — Telegram webhook handling and markdown-to-HTML conversion.
   telegram-api.ts   — Low-level Telegram sendMessage API call.
   signal.ts         — Low-level Signal bridge send call.
+  ngrok.ts          — Polls the ngrok local API to discover the public tunnel URL.
   plugins.ts        — Plugin management web UI and proxy endpoints.
   plugin-tools.ts   — Agent tools for plugin management and execution.
   python.ts         — Agent tool for sandboxed Python execution.

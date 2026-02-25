@@ -50,7 +50,7 @@ async function processQueue(): Promise<void> {
       const errorMessage = error instanceof Error ? error.message : String(error);
       if (error instanceof AuthError) {
         console.error(`[stavrobot] Auth failure, not retrying: ${errorMessage}`);
-        const loginMessage = `Authentication required. Visit ${queueConfig!.publicHostname}/providers/anthropic/login to log in.`;
+        const loginMessage = `Authentication required. Visit ${queueConfig!.publicHostname!}/providers/anthropic/login to log in.`;
         if (entry.source === "signal" && entry.sender !== undefined) {
           try {
             await sendSignalMessage(entry.sender, loginMessage);

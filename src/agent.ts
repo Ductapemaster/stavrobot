@@ -753,7 +753,7 @@ export async function createAgent(config: Config, pool: pg.Pool): Promise<Agent>
 
   const effectiveBasePrompt = (config.customPrompt !== undefined
     ? `${config.baseSystemPrompt}\n\n${config.customPrompt}`
-    : config.baseSystemPrompt) + buildPromptSuffix(config.publicHostname);
+    : config.baseSystemPrompt) + buildPromptSuffix(config.publicHostname!);
 
   const agent = new Agent({
     initialState: {
@@ -892,7 +892,7 @@ export async function handlePrompt(
 
   const effectiveBasePrompt = (config.customPrompt !== undefined
     ? `${config.baseSystemPrompt}\n\n${config.customPrompt}`
-    : config.baseSystemPrompt) + buildPromptSuffix(config.publicHostname);
+    : config.baseSystemPrompt) + buildPromptSuffix(config.publicHostname!);
 
   const pluginListSection = await fetchPluginListSection();
 

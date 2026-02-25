@@ -101,3 +101,14 @@ services:
     depends_on:
       app:
         condition: service_started
+
+  ngrok:
+    image: ngrok/ngrok:latest
+    profiles: ["ngrok"]
+    command: http app:3000
+    environment:
+      NGROK_AUTHTOKEN: ${NGROK_AUTHTOKEN}
+    restart: unless-stopped
+    depends_on:
+      app:
+        condition: service_started

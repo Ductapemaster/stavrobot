@@ -16,6 +16,7 @@ authFile = "/app/data/auth.json"
 
 
 # The public HTTPS URL where this server is reachable (no trailing slash).
+# Required unless [ngrok] is configured (see below).
 publicHostname = "https://example.com"
 
 # Optional additional instructions appended to the base system prompt.
@@ -46,7 +47,7 @@ allowedNumbers = ["+1234567890"]
 # Telegram integration. Create a bot via @BotFather on Telegram to get a token.
 # To find your chat ID, message @userinfobot on Telegram.
 # The webhook is registered at <publicHostname>/telegram/webhook on startup.
-# publicHostname (top-level) must be set when using Telegram.
+# publicHostname (top-level) must be set, or [ngrok] must be configured.
 [telegram]
 botToken = "123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11"
 allowedChatIds = [123456789]
@@ -82,3 +83,12 @@ model = "gpt-4o-transcribe"
 # alias: "sonnet", "opus", or "haiku".
 [coder]
 model = "sonnet"
+
+# Optional. Enables dynamic public URL discovery via ngrok. When this section
+# is present, publicHostname (above) may be omitted — the app will query the
+# ngrok container's local API at startup to discover the tunnel URL and use it
+# for Telegram webhook registration. Start the ngrok container with the
+# "ngrok" Docker Compose profile and set NGROK_AUTHTOKEN in your environment.
+# [ngrok]
+# Optional: override the ngrok local API URL (default: http://ngrok:4040).
+# apiUrl = "http://ngrok:4040"

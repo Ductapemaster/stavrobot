@@ -8,6 +8,7 @@ import { initializeQueue, enqueueMessage } from "./queue.js";
 import { initializeScheduler } from "./scheduler.js";
 import type { TelegramConfig } from "./config.js";
 import { registerTelegramWebhook, handleTelegramWebhook } from "./telegram.js";
+import { fetchNgrokPublicUrl } from "./ngrok.js";
 import { serveLoginPage, handleLoginPost } from "./login.js";
 import {
   serveExplorerPage,
@@ -365,6 +366,14 @@ async function handlePageRequest(
 
 async function main(): Promise<void> {
   const config = loadConfig();
+
+  if (config.ngrok !== undefined) {
+    const apiUrl = config.ngrok.apiUrl ?? "http://ngrok:4040";
+    console.log("[stavrobot] Fetching ngrok public URL from:", apiUrl);
+    config.publicHostname = await fetchNgrokPublicUrl(apiUrl);
+    console.log("[stavrobot] ngrok public URL:", config.publicHostname);
+  }
+
   const pool = await connectDatabase();
   await initializeSchema(pool);
   await initializeMemoriesSchema(pool);
@@ -377,10 +386,7 @@ async function main(): Promise<void> {
   await initializeScheduler(pool);
 
   if (config.telegram !== undefined) {
-    if (config.publicHostname === undefined) {
-      throw new Error("Config must specify publicHostname when telegram is configured.");
-    }
-    await registerTelegramWebhook(config.telegram, config.publicHostname);
+    await registerTelegramWebhook(config.telegram, config.publicHostname!);
   }
 
   const server = http.createServer((request: http.IncomingMessage, response: http.ServerResponse): void => {
