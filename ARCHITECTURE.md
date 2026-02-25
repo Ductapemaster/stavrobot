@@ -346,15 +346,16 @@ Runtime configuration is loaded from `config.toml` (or the path in `CONFIG_PATH`
 
 ### Required fields
 
-- `provider` — LLM provider (e.g., `"anthropic"`).
-- `model` — Model name.
+- `provider` — LLM provider (e.g., `"anthropic"`). Not required when `[lmstudio]` is configured.
+- `model` — Model name. Not required when `[lmstudio]` is configured.
 - `publicHostname` — Public HTTPS URL (no trailing slash).
-- Either `apiKey` or `authFile` (mutually exclusive).
+- Either `apiKey` or `authFile` (mutually exclusive). Not required when `[lmstudio]` is configured.
 
 ### Optional fields
 
 - `password` — HTTP Basic Auth password for all endpoints.
 - `customPrompt` — Additional instructions appended to the base system prompt.
+- `[lmstudio]` — Local LLM via LM Studio's OpenAI-compatible API. When set, the main chat agent uses this instead of the `provider`/`model` settings. Coding tasks (coder container) are unaffected and still use Claude Code. Fields: `baseUrl` (e.g., `"http://localhost:1234/v1"`), `model` (model name as shown in LM Studio), optional `contextWindow` (default: 32768), and optional `maxTokens` (default: 4096).
 - `[tts]` — Text-to-speech (OpenAI API).
 - `[stt]` — Speech-to-text (OpenAI API).
 - `[webSearch]` — Web search sub-agent.

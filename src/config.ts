@@ -39,6 +39,13 @@ export interface CoderConfig {
   model: string;
 }
 
+export interface LmStudioConfig {
+  baseUrl: string;
+  model: string;
+  contextWindow?: number;
+  maxTokens?: number;
+}
+
 export interface TelegramConfig {
   botToken: string;
   allowedChatIds: number[];
@@ -53,6 +60,7 @@ export interface Config {
   password?: string;
   baseSystemPrompt: string;
   customPrompt?: string;
+  lmstudio?: LmStudioConfig;
   tts?: TtsConfig;
   stt?: SttConfig;
   webSearch?: WebSearchConfig;
@@ -69,11 +77,13 @@ export function loadConfig(): Config {
   console.log(`[stavrobot] Loading base system prompt from ${SYSTEM_PROMPT_PATH}`);
   config.baseSystemPrompt = fs.readFileSync(SYSTEM_PROMPT_PATH, "utf-8").trimEnd();
 
-  if (config.apiKey === undefined && config.authFile === undefined) {
-    throw new Error("Config must specify either apiKey or authFile.");
-  }
-  if (config.apiKey !== undefined && config.authFile !== undefined) {
-    throw new Error("Config must specify either apiKey or authFile, not both.");
+  if (config.lmstudio === undefined) {
+    if (config.apiKey === undefined && config.authFile === undefined) {
+      throw new Error("Config must specify either apiKey or authFile.");
+    }
+    if (config.apiKey !== undefined && config.authFile !== undefined) {
+      throw new Error("Config must specify either apiKey or authFile, not both.");
+    }
   }
   if (config.publicHostname === undefined) {
     throw new Error("Config must specify publicHostname.");

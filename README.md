@@ -26,8 +26,22 @@ A personal AI assistant with persistent memory, sandboxed code execution, and Si
 
 1. Copy `config.example.toml` to `data/main/config.toml`.
 2. Fill in API keys and settings. The example file has comments explaining each section.
-3. At minimum, set `authFile` (or `apiKey`) and `publicHostname`. Everything else is optional.
+3. At minimum, set `authFile` (or `apiKey`) and `publicHostname`. If using a local LLM via LM Studio, set `[lmstudio]` instead (see below). Everything else is optional.
 4. Copy `env.example` to `.env` and set your timezone (`TZ`). Postgres credentials and other environment settings can also be overridden there. The defaults work out of the box with docker-compose.
+
+### LM Studio setup (local LLM)
+
+You can use a local LLM via [LM Studio](https://lmstudio.ai/) instead of Claude for the main chat agent. Coding tasks (the `coder` container) always use Claude Code regardless of this setting.
+
+1. Install LM Studio, download a model, and start the local server (default port: 1234).
+2. Add a `[lmstudio]` section to your config:
+   ```toml
+   [lmstudio]
+   baseUrl = "http://host.docker.internal:1234/v1"
+   model = "lmstudio-community/meta-llama-3.1-8b-instruct"
+   ```
+   Use `host.docker.internal` when running inside Docker to reach a server on the host.
+3. The top-level `apiKey` and `authFile` settings are not required when `[lmstudio]` is set.
 
 ### Claude Code setup
 
