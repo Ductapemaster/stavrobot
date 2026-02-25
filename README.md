@@ -123,9 +123,12 @@ A full list of available skills is at
 fetch and install it from that URL. The bot will show you what the skill does and ask for
 confirmation before proceeding.
 
-To contribute a skill, add a markdown file to `misc/skills/` in this repo. Each skill
-file has YAML front matter with `title`, `description`, `version`, and an optional
-`author`, followed by the plain-language instructions in the body. Submit a PR.
+Skill files live on the `pages` branch of this repo (served via Cloudflare Pages). To
+contribute a skill, add a markdown file to `skills/` on that branch. Each skill file has
+YAML front matter with `title`, `description`, `version`, and an optional `author`,
+followed by the plain-language instructions in the body. See
+[SKILL-AUTHORING.md](misc/SKILL-AUTHORING.md) for the full authoring guide. Submit a PR
+against the `pages` branch.
 
 ## How to make your own plugin
 

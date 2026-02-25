@@ -12,8 +12,9 @@ This guide covers everything you need to write a complete skill from scratch.
 
 ## File format
 
-Skill files live in `misc/skills/` and are named with short, descriptive, kebab-case
-names (e.g. `gym.md`, `meal-planning.md`, `finance.md`).
+Skill files live in `skills/` on the `pages` branch of this repo and are named with
+short, descriptive, kebab-case names (e.g. `gym.md`, `meal-planning.md`, `finance.md`).
+The bootstrap file lives at the root of the `pages` branch as `bootstrap.md`.
 
 Every skill file has two parts: a YAML front matter block and a body.
 
@@ -45,8 +46,8 @@ steps with markdown headers (`## Step 1: ...`). The bot follows the steps in ord
 The last step must always record the skill in the `skills` table (see
 [Recording the skill](#recording-the-skill) below).
 
-See `misc/skills/gym.md` for a complete example of a domain skill, and `misc/bootstrap.md`
-for the bootstrap skill that sets up the skill system itself.
+See `skills/gym.md` on the `pages` branch for a complete example of a domain skill, and
+`bootstrap.md` for the bootstrap skill that sets up the skill system itself.
 
 ---
 
@@ -63,7 +64,7 @@ List the table name, then each column with its type, whether it is nullable, any
 value, and any constraints (primary key, foreign key, unique). Use "if not exists"
 language so the skill is safe to re-run.
 
-Example from `misc/skills/gym.md`:
+Example from `skills/gym.md`:
 
 ```
 **`workouts`** — A single gym session.
@@ -117,7 +118,7 @@ JavaScript — the bot generates the implementation. Be specific about the data 
 tables, which columns, what ordering, what filters) but leave the visual design to the
 bot.
 
-Example from `misc/skills/gym.md`:
+Example from `skills/gym.md`:
 
 ```
 **`/pages/gym`** — Main dashboard.
@@ -299,7 +300,7 @@ Insert a row into the `skills` table for this skill:
 - `version`: the version from the front matter of this file
 ```
 
-The `skills` table is created by the bootstrap skill (`misc/bootstrap.md`). It has
+The `skills` table is created by the bootstrap skill (`bootstrap.md`). It has
 columns: `name` (text, primary key), `url` (text), `content` (text), `version`
 (integer), `installed_at` (timestamp), `updated_at` (timestamp).
 
@@ -346,9 +347,9 @@ scratchpad.
 
 ## Testing
 
-1. Run `misc/build-pages.sh` to verify the skill appears in the generated index at
+1. Run `build-pages.sh` to verify the skill appears in the generated index at
    `output/skills/index.md`. This script reads the front matter from every file in
-   `misc/skills/` and builds the index table. If your front matter is malformed, the
+   `skills/` and builds the index table. If your front matter is malformed, the
    entry will be missing or incorrect.
 
 2. Manually tell the bot to fetch and install the skill to test the full flow. The bot
@@ -360,11 +361,11 @@ scratchpad.
 
 ## Contributing
 
-1. Add the skill file to `misc/skills/`.
-2. Run `misc/build-pages.sh` and verify the skill appears correctly in
+1. Add the skill file to `skills/` on the `pages` branch.
+2. Run `build-pages.sh` and verify the skill appears correctly in
    `output/skills/index.md`.
 3. Submit a pull request.
 
-Do not modify `misc/bootstrap.md` unless you are changing the skill system itself.
+Do not modify `bootstrap.md` unless you are changing the skill system itself.
 The bootstrap file is special: it sets up the `skills` table and teaches the bot the
 installation and upgrade workflow. Changes to it affect every skill.
