@@ -1085,12 +1085,18 @@ export async function handlePrompt(
             messages: [
               {
                 role: "user" as const,
-                content: serializedMessages,
+                content: [
+                  "Summarize the conversation inside <conversation> tags according to your system instructions.",
+                  "",
+                  "<conversation>",
+                  serializedMessages,
+                  "</conversation>",
+                ].join("\n"),
                 timestamp: Date.now(),
               },
             ],
           },
-          { apiKey }
+          { apiKey, temperature: 0.1 }
         );
 
         const summaryText = response.content

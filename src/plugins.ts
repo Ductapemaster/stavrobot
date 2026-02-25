@@ -216,7 +216,25 @@ const PLUGINS_PAGE_HTML = `<!DOCTYPE html>
       display: flex;
       align-items: center;
       gap: 10px;
-      margin-bottom: 8px;
+      cursor: pointer;
+      user-select: none;
+    }
+    .plugin-header .chevron {
+      margin-left: auto;
+      font-size: 10px;
+      color: #888;
+      transition: transform 0.2s ease;
+      /* Rotated 90deg when expanded so it points down; default points right. */
+      transform: rotate(0deg);
+    }
+    .plugin-card:not(.collapsed) .plugin-header .chevron {
+      transform: rotate(90deg);
+    }
+    .plugin-body {
+      margin-top: 8px;
+    }
+    .plugin-card.collapsed .plugin-body {
+      display: none;
     }
     .plugin-name {
       font-size: 16px;
@@ -442,20 +460,28 @@ const PLUGINS_PAGE_HTML = `<!DOCTYPE html>
         ? \`<button class="btn" onclick="updatePlugin('\${escapeHtml(plugin.name)}')">Update</button>\`
         : "";
 
+      card.className = "plugin-card collapsed";
       card.innerHTML = \`
         <div class="plugin-header">
           <span class="plugin-name">\${escapeHtml(plugin.name)}</span>
           <span class="plugin-badge">\${plugin.editable ? "editable" : "git"}</span>
+          <span class="chevron">&#9658;</span>
         </div>
-        \${plugin.description ? \`<div class="plugin-description">\${escapeHtml(plugin.description)}</div>\` : ""}
-        \${toolsHtml}
-        \${configHtml}
-        <div class="actions">
-          \${updateBtn}
-          <button class="btn btn-danger" onclick="deletePlugin('\${escapeHtml(plugin.name)}')">Delete</button>
+        <div class="plugin-body">
+          \${plugin.description ? \`<div class="plugin-description">\${escapeHtml(plugin.description)}</div>\` : ""}
+          \${toolsHtml}
+          \${configHtml}
+          <div class="actions">
+            \${updateBtn}
+            <button class="btn btn-danger" onclick="deletePlugin('\${escapeHtml(plugin.name)}')">Delete</button>
+          </div>
+          <div class="card-message" id="msg-\${escapeHtml(plugin.name)}"></div>
         </div>
-        <div class="card-message" id="msg-\${escapeHtml(plugin.name)}"></div>
       \`;
+
+      card.querySelector(".plugin-header").addEventListener("click", () => {
+        card.classList.toggle("collapsed");
+      });
 
       for (const input of card.querySelectorAll(".config-field input[data-key]")) {
         input.addEventListener("keydown", (event) => {
