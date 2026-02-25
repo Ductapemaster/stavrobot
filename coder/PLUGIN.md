@@ -203,6 +203,15 @@ The script must be executable (`chmod +x run.py`).
 
 Any executable works — use a shebang line. Node.js and Python are available in the runtime environment. The script must be executable (`chmod +x`).
 
+## Parameter validation
+
+Tools must validate their input parameters:
+
+- Reject unknown parameters by checking that all keys in the input object are declared in the tool manifest. Return an error (non-zero exit, message on stderr) listing the unexpected keys.
+- Validate that all required parameters are present and have the expected type.
+
+This keeps the tool contract strict and ensures the agent gets clear feedback when it passes the wrong parameters, rather than having errors surface later or go unnoticed.
+
 ## Example: a complete tool
 
 A Python tool that takes a `query` string and returns a result:
@@ -217,9 +226,16 @@ import json
 import sys
 
 
+KNOWN_PARAMS = {"query"}
+
+
 def main() -> None:
     """Read a query from stdin and return a result."""
     params = json.load(sys.stdin)
+    unknown = set(params) - KNOWN_PARAMS
+    if unknown:
+        print(f"Unknown parameters: {', '.join(sorted(unknown))}", file=sys.stderr)
+        sys.exit(1)
     query = params["query"]
     result = f"You asked: {query}"
     json.dump({"result": result}, sys.stdout)
