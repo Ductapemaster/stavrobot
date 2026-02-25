@@ -34,9 +34,10 @@ services:
       PGPASSWORD: ${POSTGRES_PASSWORD:-stavrobot}
       PGDATABASE: ${POSTGRES_DB:-stavrobot}
       COMPACTION_DEBUG: ${COMPACTION_DEBUG:-0}
+      CONFIG_PATH: /app/config/config.toml
     restart: unless-stopped
     volumes:
-      - ./data/main/config.toml:/app/config.toml
+      - ./data/main:/app/config
       - ./data/app:/app/data
     depends_on:
       postgres:
