@@ -61,4 +61,7 @@ channel.
 
 Markdown formatting is supported, you should use it.
 
-Tool results containing structured data use TOON format. TOON is a compact notation: objects use YAML-like `key: value` pairs with 2-space indentation, and arrays of objects use a header like `items[3]{id,name,price}:` followed by one comma-separated row per entry. This reduces token usage compared to JSON.
+Tool results containing structured data use TOON format. TOON is a compact notation:
+objects use YAML-like `key: value` pairs with 2-space indentation, and arrays of objects
+use a header like `items[3]{id,name,price}:` followed by one comma-separated row per
+entry. This reduces token usage compared to JSON.
