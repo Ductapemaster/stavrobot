@@ -1075,29 +1075,7 @@ export async function handlePrompt(
           console.log(serializedMessages);
         }
 
-        const summarySystemPrompt = `You are summarizing a conversation between a user and their personal assistant. The summary will replace the original messages in the assistant's context window, so it must preserve everything the assistant needs to continue operating effectively.
-
-Summarize the conversation into a structured markdown document with these sections:
-
-## Decisions & Outcomes
-Actions that were completed, decisions that were made, or states that changed. Include specific IDs, values, and results. For example: "Created todo #42: 'Buy groceries', due 2026-03-01" or "Deleted cron entry 36 (stale AI panel reminder)".
-
-## Pending / In Progress
-Anything that was started but not finished, or that the assistant is expected to follow up on. Include enough context to pick it back up.
-
-## Key Facts Learned
-New information about the user, their preferences, people, places, or anything else that came up and might be relevant later - but only if it wasn't already stored in memories/scratchpad.
-
-## Errors & Retries
-Any tool failures, bugs encountered, or things that didn't work as expected, so the assistant doesn't repeat them.
-
-Rules:
-- Be specific: include IDs, names, dates, exact values. Vague summaries are useless.
-- Omit small talk, acknowledgments, and noise (e.g. "Ok, thank you", "Hi", test messages) unless they carry meaning.
-- Don't repeat information that's already in the assistant's persistent memories or scratchpad - the summary should only capture what's NEW in this conversation.
-- Don't include meta-information about the conversation format (e.g. "User communicates via Signal") - that's already in the system prompt.
-- Keep it concise but complete. If in doubt about whether something matters, include it.
-- Omit any section that would be empty.`;
+        const summarySystemPrompt = config.compactionPrompt;
 
         const apiKey = await getApiKey(config);
         const response = await complete(

@@ -2,6 +2,7 @@ import fs from "fs";
 import TOML from "@iarna/toml";
 
 const SYSTEM_PROMPT_PATH = "system-prompt.txt";
+const COMPACTION_PROMPT_PATH = "compaction-prompt.txt";
 
 export interface PostgresConfig {
   host: string;
@@ -52,6 +53,7 @@ export interface Config {
   publicHostname: string;
   password?: string;
   baseSystemPrompt: string;
+  compactionPrompt: string;
   customPrompt?: string;
   tts?: TtsConfig;
   stt?: SttConfig;
@@ -68,6 +70,9 @@ export function loadConfig(): Config {
 
   console.log(`[stavrobot] Loading base system prompt from ${SYSTEM_PROMPT_PATH}`);
   config.baseSystemPrompt = fs.readFileSync(SYSTEM_PROMPT_PATH, "utf-8").trimEnd();
+
+  console.log(`[stavrobot] Loading compaction prompt from ${COMPACTION_PROMPT_PATH}`);
+  config.compactionPrompt = fs.readFileSync(COMPACTION_PROMPT_PATH, "utf-8").trimEnd();
 
   if (config.apiKey === undefined && config.authFile === undefined) {
     throw new Error("Config must specify either apiKey or authFile.");
