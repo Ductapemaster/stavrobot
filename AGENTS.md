@@ -185,7 +185,7 @@ The Python code (`client.py`) is a standalone CLI client with no third-party dep
 - DO NOT REVERT ANY CHANGES. If you notice unrelated changes in the repo, pause and ask
   the user, as they might be changes the user has made.
 - After completing any task that modifies files, ALWAYS run `jj describe -m "..."` with
-  an appropriate message describing the whole change.
+  an appropriate message describing the whole change. DO NOT SKIP THIS.
 
 ## Coder subsystem
 
