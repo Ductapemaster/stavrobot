@@ -948,6 +948,12 @@ async function handleUpdate(
     return;
   }
 
+  if (isEditable(pluginName)) {
+    response.writeHead(400, { "Content-Type": "application/json" });
+    response.end(JSON.stringify({ error: `Plugin "${pluginName}" is editable (not git-installed) and cannot be updated` }));
+    return;
+  }
+
   const pluginDir = bundle.bundleDir;
 
   console.log(`[stavrobot-plugin-runner] Updating plugin "${pluginName}" in ${pluginDir}`);
