@@ -1061,13 +1061,18 @@ export async function handlePrompt(
         const previousCompaction = await loadLatestCompaction(pool);
         const previousBoundary = previousCompaction ? previousCompaction.upToMessageId : 0;
 
-        // The offset must match the number of messages we are keeping so that the
-        // DB boundary aligns with the in-memory cut point.
+        // The boundary must be the last compacted message id. loadMessages keeps
+        // rows with id > upToMessageId, so using keepCount (not keepCount - 1)
+        // preserves exactly messagesToKeep.
         const keepCount = messagesToKeep.length;
         const cutoffResult = await pool.query(
-          `SELECT id FROM messages WHERE id > $1 ORDER BY id DESC LIMIT 1 OFFSET ${keepCount - 1}`,
+          `SELECT id FROM messages WHERE id > $1 ORDER BY id DESC LIMIT 1 OFFSET ${keepCount}`,
           [previousBoundary]
         );
+        if (cutoffResult.rows.length === 0) {
+          console.warn("[stavrobot] Compaction skipped: no cutoff message found for computed boundary.");
+          return;
+        }
         const upToMessageId = cutoffResult.rows[0].id as number;
 
         await saveCompaction(pool, summaryText, upToMessageId);
