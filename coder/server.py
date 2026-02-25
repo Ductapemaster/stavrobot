@@ -144,8 +144,7 @@ def run_coding_task(task_id: str, message: str, plugin: str) -> None:
         # Ensure the per-plugin cache directory exists and is owned by the plugin user.
         cache_dir = f"/cache/{plugin}/uv"
         os.makedirs(cache_dir, exist_ok=True)
-        os.chown(f"/cache/{plugin}", uid, gid)
-        os.chown(cache_dir, uid, gid)
+        subprocess.run(["chown", "-R", f"{uid}:{gid}", f"/cache/{plugin}"], check=True)
 
         username = f"plug_{plugin.replace('-', '_')}"[:MAX_USERNAME_LENGTH]
         subprocess_env = {

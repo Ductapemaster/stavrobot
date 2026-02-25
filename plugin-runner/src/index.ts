@@ -286,6 +286,10 @@ function migrateExistingPlugins(): void {
       const { uid, gid } = ensurePluginUser(pluginName);
       execFileSync("chown", ["-R", `${uid}:${gid}`, bundleDir], { stdio: "pipe" });
       fs.chmodSync(bundleDir, 0o700);
+      const cacheDir = `/cache/${pluginName}`;
+      if (fs.existsSync(cacheDir)) {
+        execFileSync("chown", ["-R", `${uid}:${gid}`, cacheDir], { stdio: "pipe" });
+      }
       console.log(`[stavrobot-plugin-runner] Migrated plugin "${pluginName}" to user "${derivePluginUsername(pluginName)}"`);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -349,8 +353,7 @@ async function runScript(
   const pluginName = path.relative(PLUGINS_DIR, cwd).split(path.sep)[0];
   const uvCacheDir = `/cache/${pluginName}/uv`;
   fs.mkdirSync(uvCacheDir, { recursive: true });
-  fs.chownSync(`/cache/${pluginName}`, uid, gid);
-  fs.chownSync(uvCacheDir, uid, gid);
+  execFileSync("chown", ["-R", `${uid}:${gid}`, `/cache/${pluginName}`], { stdio: "pipe" });
 
   return new Promise<ScriptResult>((resolve) => {
     const child = spawn(entrypoint, [], {
@@ -1105,6 +1108,7 @@ async function handleRemove(
 
   console.log(`[stavrobot-plugin-runner] Removing plugin "${pluginName}" from ${pluginDir}`);
   fs.rmSync(pluginDir, { recursive: true, force: true });
+  fs.rmSync(`/cache/${pluginName}`, { recursive: true, force: true });
   removePluginUser(pluginName);
 
   loadBundles();
