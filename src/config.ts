@@ -39,9 +39,20 @@ export interface CoderConfig {
   model: string;
 }
 
+export interface LmStudioConfig {
+  baseUrl: string;
+  model: string;
+  contextWindow?: number;
+  maxTokens?: number;
+}
+
 export interface TelegramConfig {
   botToken: string;
   allowedChatIds: number[];
+}
+
+export interface NgrokConfig {
+  apiUrl?: string;
 }
 
 export interface Config {
@@ -49,16 +60,18 @@ export interface Config {
   model: string;
   apiKey?: string;
   authFile?: string;
-  publicHostname: string;
+  publicHostname?: string;
   password?: string;
   baseSystemPrompt: string;
   customPrompt?: string;
+  lmstudio?: LmStudioConfig;
   tts?: TtsConfig;
   stt?: SttConfig;
   webSearch?: WebSearchConfig;
   webFetch?: WebFetchConfig;
   coder?: CoderConfig;
   telegram?: TelegramConfig;
+  ngrok?: NgrokConfig;
 }
 
 export function loadConfig(): Config {
@@ -69,23 +82,27 @@ export function loadConfig(): Config {
   console.log(`[stavrobot] Loading base system prompt from ${SYSTEM_PROMPT_PATH}`);
   config.baseSystemPrompt = fs.readFileSync(SYSTEM_PROMPT_PATH, "utf-8").trimEnd();
 
-  if (config.apiKey === undefined && config.authFile === undefined) {
-    throw new Error("Config must specify either apiKey or authFile.");
+  if (config.lmstudio === undefined) {
+    if (config.apiKey === undefined && config.authFile === undefined) {
+      throw new Error("Config must specify either apiKey or authFile.");
+    }
+    if (config.apiKey !== undefined && config.authFile !== undefined) {
+      throw new Error("Config must specify either apiKey or authFile, not both.");
+    }
   }
-  if (config.apiKey !== undefined && config.authFile !== undefined) {
-    throw new Error("Config must specify either apiKey or authFile, not both.");
-  }
-  if (config.publicHostname === undefined) {
-    throw new Error("Config must specify publicHostname.");
-  }
-  if (config.publicHostname.trim() === "") {
-    throw new Error("Config publicHostname must not be empty.");
-  }
-  if (!config.publicHostname.startsWith("http://") && !config.publicHostname.startsWith("https://")) {
-    throw new Error("Config publicHostname must start with http:// or https://.");
-  }
-  if (config.publicHostname.endsWith("/")) {
-    throw new Error("Config publicHostname must not end with a trailing slash.");
+  if (config.ngrok === undefined) {
+    if (config.publicHostname === undefined) {
+      throw new Error("Config must specify publicHostname (or configure [ngrok] to use a dynamic URL).");
+    }
+    if (config.publicHostname.trim() === "") {
+      throw new Error("Config publicHostname must not be empty.");
+    }
+    if (!config.publicHostname.startsWith("http://") && !config.publicHostname.startsWith("https://")) {
+      throw new Error("Config publicHostname must start with http:// or https://.");
+    }
+    if (config.publicHostname.endsWith("/")) {
+      throw new Error("Config publicHostname must not end with a trailing slash.");
+    }
   }
 
   return config;

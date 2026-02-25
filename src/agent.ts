@@ -1,12 +1,12 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import pg from "pg";
-import { Type, getModel, type TextContent, type ImageContent, type AssistantMessage, complete } from "@mariozechner/pi-ai";
+import { Type, getModel, type TextContent, type ImageContent, type AssistantMessage, type Model, complete } from "@mariozechner/pi-ai";
 import { Agent, type AgentTool, type AgentToolResult, type AgentMessage } from "@mariozechner/pi-agent-core";
 import type { Config, TelegramConfig, TtsConfig } from "./config.js";
 import type { FileAttachment } from "./uploads.js";
 import { transcribeAudio } from "./stt.js";
-import { getApiKey } from "./auth.js";
+import { getApiKey, AuthError } from "./auth.js";
 import { executeSql, loadMessages, saveMessage, saveCompaction, loadLatestCompaction, loadAllMemories, upsertMemory, deleteMemory, upsertScratchpad, deleteScratchpad, createCronEntry, updateCronEntry, deleteCronEntry, listCronEntries, loadAllScratchpadTitles, type Memory } from "./database.js";
 import { reloadScheduler } from "./scheduler.js";
 import { createWebSearchTool } from "./web-search.js";
@@ -263,7 +263,7 @@ export function createTextToSpeechTool(ttsConfig: TtsConfig): AgentTool {
   return {
     name: "text_to_speech",
     label: "Text to speech",
-    description: "Convert text to speech audio. Returns a file path to the generated audio file. Use this to create voice notes that can be sent via send_signal_message.",
+    description: "Convert text to speech audio. Returns a file path to the generated audio file. Use this to create voice notes that can be sent via send_signal_message or send_telegram_message.",
     parameters: Type.Object({
       text: Type.String({ description: "The text to convert to speech." }),
     }),
@@ -704,7 +704,29 @@ export function createManageCronTool(pool: pg.Pool): AgentTool {
 }
 
 export async function createAgent(config: Config, pool: pg.Pool): Promise<Agent> {
-  const model = getModel(config.provider as any, config.model as any);
+  let model: Model<any>;
+  if (config.lmstudio !== undefined) {
+    model = {
+      id: config.lmstudio.model,
+      name: config.lmstudio.model,
+      api: "openai-completions",
+      provider: "lm-studio",
+      baseUrl: config.lmstudio.baseUrl,
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: config.lmstudio.contextWindow ?? 32768,
+      maxTokens: config.lmstudio.maxTokens ?? 4096,
+      compat: {
+        supportsStore: false,
+        supportsReasoningEffort: false,
+        supportsDeveloperRole: false,
+        maxTokensField: "max_tokens",
+      },
+    };
+  } else {
+    model = getModel(config.provider as any, config.model as any);
+  }
   const messages = await loadMessages(pool);
   const tools = [createExecuteSqlTool(pool), createManageKnowledgeTool(pool), createSendSignalMessageTool(), createManageCronTool(pool), createRunPythonTool(), createManagePagesTool(pool), createManageUploadsTool(), createSearchTool(pool), createManageFilesTool()];
   if (config.webSearch !== undefined) {
@@ -731,7 +753,7 @@ export async function createAgent(config: Config, pool: pg.Pool): Promise<Agent>
 
   const effectiveBasePrompt = (config.customPrompt !== undefined
     ? `${config.baseSystemPrompt}\n\n${config.customPrompt}`
-    : config.baseSystemPrompt) + buildPromptSuffix(config.publicHostname);
+    : config.baseSystemPrompt) + buildPromptSuffix(config.publicHostname!);
 
   const agent = new Agent({
     initialState: {
@@ -740,7 +762,7 @@ export async function createAgent(config: Config, pool: pg.Pool): Promise<Agent>
       tools,
       messages,
     },
-    getApiKey: () => getApiKey(config),
+    getApiKey: config.lmstudio !== undefined ? () => "lm-studio" : () => getApiKey(config),
   });
 
   return agent;
@@ -870,7 +892,7 @@ export async function handlePrompt(
 
   const effectiveBasePrompt = (config.customPrompt !== undefined
     ? `${config.baseSystemPrompt}\n\n${config.customPrompt}`
-    : config.baseSystemPrompt) + buildPromptSuffix(config.publicHostname);
+    : config.baseSystemPrompt) + buildPromptSuffix(config.publicHostname!);
 
   const pluginListSection = await fetchPluginListSection();
 
@@ -1007,6 +1029,11 @@ export async function handlePrompt(
     });
     agent.replaceMessages(cleanedMessages);
     agent.state.error = undefined;
+    // Treat authentication errors as AuthError so the queue handles them
+    // correctly (sends a login link and does not retry).
+    if (errorJson.includes('"authentication_error"')) {
+      throw new AuthError(`Agent error: ${errorJson}`);
+    }
     throw new Error(`Agent error: ${errorJson}`);
   }
 

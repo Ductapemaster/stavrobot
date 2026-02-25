@@ -8,6 +8,7 @@ import { initializeQueue, enqueueMessage } from "./queue.js";
 import { initializeScheduler } from "./scheduler.js";
 import type { TelegramConfig } from "./config.js";
 import { registerTelegramWebhook, handleTelegramWebhook } from "./telegram.js";
+import { fetchNgrokPublicUrl } from "./ngrok.js";
 import { serveLoginPage, handleLoginPost } from "./login.js";
 import {
   serveExplorerPage,
@@ -365,6 +366,14 @@ async function handlePageRequest(
 
 async function main(): Promise<void> {
   const config = loadConfig();
+
+  if (config.ngrok !== undefined) {
+    const apiUrl = config.ngrok.apiUrl ?? "http://ngrok:4040";
+    console.log("[stavrobot] Fetching ngrok public URL from:", apiUrl);
+    config.publicHostname = await fetchNgrokPublicUrl(apiUrl);
+    console.log("[stavrobot] ngrok public URL:", config.publicHostname);
+  }
+
   const pool = await connectDatabase();
   await initializeSchema(pool);
   await initializeMemoriesSchema(pool);
@@ -375,13 +384,6 @@ async function main(): Promise<void> {
   const agent = await createAgent(config, pool);
   initializeQueue(agent, pool, config);
   await initializeScheduler(pool);
-
-  if (config.telegram !== undefined) {
-    if (config.publicHostname === undefined) {
-      throw new Error("Config must specify publicHostname when telegram is configured.");
-    }
-    await registerTelegramWebhook(config.telegram, config.publicHostname);
-  }
 
   const server = http.createServer((request: http.IncomingMessage, response: http.ServerResponse): void => {
     const url = new URL(request.url || "/", `http://${request.headers.host}`);
@@ -453,9 +455,10 @@ async function main(): Promise<void> {
   });
 
   const port = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
-  server.listen(port, () => {
+  await new Promise<void>((resolve) => server.listen(port, () => {
     console.log(`Server listening on port ${port}`);
-  });
+    resolve();
+  }));
 
   const internalServer = http.createServer((request: http.IncomingMessage, response: http.ServerResponse): void => {
     if (request.method === "POST" && new URL(request.url || "/", "http://localhost").pathname === "/chat") {
@@ -466,9 +469,14 @@ async function main(): Promise<void> {
     }
   });
 
-  internalServer.listen(3001, () => {
+  await new Promise<void>((resolve) => internalServer.listen(3001, () => {
     console.log("[stavrobot] Internal server listening on port 3001");
-  });
+    resolve();
+  }));
+
+  if (config.telegram !== undefined) {
+    await registerTelegramWebhook(config.telegram, config.publicHostname!);
+  }
 }
 
 // Only run main() when this file is the entry point, not when imported by tests.
