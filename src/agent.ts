@@ -6,7 +6,7 @@ import { Agent, type AgentTool, type AgentToolResult, type AgentMessage } from "
 import type { Config, TelegramConfig, TtsConfig } from "./config.js";
 import type { FileAttachment } from "./uploads.js";
 import { transcribeAudio } from "./stt.js";
-import { getApiKey } from "./auth.js";
+import { getApiKey, AuthError } from "./auth.js";
 import { executeSql, loadMessages, saveMessage, saveCompaction, loadLatestCompaction, loadAllMemories, upsertMemory, deleteMemory, upsertScratchpad, deleteScratchpad, createCronEntry, updateCronEntry, deleteCronEntry, listCronEntries, loadAllScratchpadTitles, type Memory } from "./database.js";
 import { reloadScheduler } from "./scheduler.js";
 import { createWebSearchTool } from "./web-search.js";
@@ -1029,6 +1029,11 @@ export async function handlePrompt(
     });
     agent.replaceMessages(cleanedMessages);
     agent.state.error = undefined;
+    // Treat authentication errors as AuthError so the queue handles them
+    // correctly (sends a login link and does not retry).
+    if (errorJson.includes('"authentication_error"')) {
+      throw new AuthError(`Agent error: ${errorJson}`);
+    }
     throw new Error(`Agent error: ${errorJson}`);
   }
 
