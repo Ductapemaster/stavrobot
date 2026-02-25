@@ -1,5 +1,6 @@
 import { Type } from "@mariozechner/pi-ai";
 import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
+import { encodeToToon } from "./toon.js";
 
 const PLUGIN_RUNNER_BASE_URL = "http://plugin-runner:3003";
 const CLAUDE_CODE_BASE_URL = "http://coder:3002";
@@ -47,7 +48,7 @@ function formatRunPluginToolResult(pluginName: string, toolName: string, respons
   }
 
   if (parsed.success) {
-    const output = typeof parsed.output === "string" ? parsed.output : JSON.stringify(parsed.output);
+    const output = typeof parsed.output === "string" ? parsed.output : encodeToToon(parsed.output);
     return `The run of tool "${toolName}" (plugin "${pluginName}") returned:\n\`\`\`\n${output}\n\`\`\``;
   } else {
     const error = parsed.error ?? "Unknown error";

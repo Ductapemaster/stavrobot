@@ -1,6 +1,7 @@
 import pg from "pg";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { loadPostgresConfig } from "./config.js";
+import { encodeToToon } from "./toon.js";
 
 export async function connectDatabase(): Promise<pg.Pool> {
   const config = loadPostgresConfig();
@@ -428,7 +429,7 @@ export async function executeSql(pool: pg.Pool, sql: string): Promise<string> {
   const result = await pool.query(sql);
   
   if (result.command === "SELECT") {
-    return JSON.stringify(result.rows);
+    return encodeToToon(result.rows);
   } else {
     return JSON.stringify({ rowCount: result.rowCount });
   }

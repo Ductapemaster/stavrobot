@@ -23,11 +23,11 @@ describe("createRunPluginToolTool", () => {
     expect(text).toBe('The run of tool "mytool" (plugin "myplugin") returned:\n```\nhello world\n```');
   });
 
-  it("formats a successful sync result with object output as JSON", async () => {
+  it("formats a successful sync result with object output as TOON", async () => {
     mockFetch(200, JSON.stringify({ success: true, output: { key: "value" } }));
     const result = await tool.execute("call-2", { plugin: "myplugin", tool: "mytool", parameters: "{}" });
     const text = (result.content[0] as { type: string; text: string }).text;
-    expect(text).toBe('The run of tool "mytool" (plugin "myplugin") returned:\n```\n{"key":"value"}\n```');
+    expect(text).toBe('The run of tool "mytool" (plugin "myplugin") returned:\n```\nkey: value\n```');
   });
 
   it("formats a failed sync result with error message", async () => {

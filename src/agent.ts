@@ -18,6 +18,7 @@ import { createManageFilesTool } from "./files.js";
 import { createSearchTool } from "./search.js";
 import { createManageUploadsTool } from "./upload-tools.js";
 import { convertMarkdownToTelegramHtml } from "./telegram.js";
+import { encodeToToon } from "./toon.js";
 import { sendSignalMessage } from "./signal.js";
 import { sendTelegramMessage } from "./telegram-api.js";
 import { TEMP_ATTACHMENTS_DIR } from "./temp-dir.js";
@@ -688,7 +689,7 @@ export function createManageCronTool(pool: pg.Pool): AgentTool {
 
       if (action === "list") {
         const entries = await listCronEntries(pool);
-        const message = JSON.stringify(entries);
+        const message = encodeToToon(entries);
         return {
           content: [{ type: "text" as const, text: message }],
           details: { message },

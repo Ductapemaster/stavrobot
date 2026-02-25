@@ -1,6 +1,7 @@
 import pg from "pg";
 import { Type } from "@mariozechner/pi-ai";
 import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
+import { encodeToToon } from "./toon.js";
 
 const EXCLUDED_TABLES = new Set(["messages", "compactions"]);
 const TEXT_LIKE_TYPES = new Set(["text", "varchar", "character", "character varying"]);
@@ -92,7 +93,7 @@ export function createSearchTool(pool: pg.Pool): AgentTool {
       const parts: string[] = [];
       for (const tableResult of tableResults) {
         parts.push(`Table: ${tableResult.tableName} (${tableResult.matchCount} match(es))`);
-        parts.push(JSON.stringify(tableResult.rows, null, 2));
+        parts.push(encodeToToon(tableResult.rows));
       }
       const result = parts.join("\n\n");
 
