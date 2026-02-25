@@ -231,6 +231,7 @@ The agent has access to these tools, conditionally enabled based on configuratio
 - `delete_page` — Delete a web page.
 - `read_upload` — Read uploaded file contents (text or image).
 - `delete_upload` — Delete an uploaded file.
+- `manage_files` — Write, read, list, or delete files in an ephemeral temp directory (`/tmp/stavrobot-temp/files/`). Supports utf-8 and base64 encodings. File paths can be passed as `attachmentPath` to `send_signal_message` or `send_telegram_message`.
 - `install_plugin`, `update_plugin`, `remove_plugin`, `configure_plugin` — Manage git-installed plugins.
 - `list_plugins`, `show_plugin`, `run_plugin_tool` — Discover and execute plugin tools.
 

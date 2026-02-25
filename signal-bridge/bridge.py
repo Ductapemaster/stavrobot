@@ -11,6 +11,7 @@ import http.client
 import http.server
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -250,19 +251,20 @@ def make_send_handler(
                     except ValueError as error:
                         self.send_error_response(400, f"Invalid base64 attachment: {error}")
                         return
-                    suffix = "." + attachment_filename.rsplit(".", 1)[-1] if "." in attachment_filename else ".bin"
-                    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as temp_file:
+                    safe_filename = os.path.basename(attachment_filename) or "attachment.bin"
+                    temp_dir = tempfile.mkdtemp()
+                    temp_path = os.path.join(temp_dir, safe_filename)
+                    with open(temp_path, "wb") as temp_file:
                         temp_file.write(attachment_bytes)
-                        temp_path = temp_file.name
                     try:
                         success = send_signal_message_with_attachment(
                             recipient, message_text, request_counter.next(), [temp_path]
                         )
                     finally:
                         try:
-                            os.unlink(temp_path)
+                            shutil.rmtree(temp_dir)
                         except OSError as error:
-                            log(f"Warning: failed to delete temp file {temp_path}: {error}")
+                            log(f"Warning: failed to delete temp directory {temp_dir}: {error}")
                 else:
                     plain_text, text_styles = convert_markdown(message_text)
                     success = send_signal_message(recipient, plain_text, request_counter.next(), text_styles)

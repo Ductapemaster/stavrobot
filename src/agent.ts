@@ -14,16 +14,14 @@ import { createWebFetchTool } from "./web-fetch.js";
 import { createInstallPluginTool, createUpdatePluginTool, createRemovePluginTool, createConfigurePluginTool, createListPluginsTool, createShowPluginTool, createRunPluginToolTool, createCreatePluginTool, createRequestCodingTaskTool } from "./plugin-tools.js";
 import { createRunPythonTool } from "./python.js";
 import { createUpsertPageTool, createDeletePageTool } from "./pages.js";
+import { createManageFilesTool } from "./files.js";
 import { createSearchTool } from "./search.js";
 import { createReadUploadTool, createDeleteUploadTool } from "./upload-tools.js";
 import { convertMarkdownToTelegramHtml } from "./telegram.js";
 import { sendSignalMessage } from "./signal.js";
 import { sendTelegramMessage } from "./telegram-api.js";
-
-// Ephemeral files created by the agent (e.g. TTS output) are written here so
-// the send tools can identify them for auto-deletion without risking deletion
-// of user-uploaded files that also live under /tmp.
-export const TEMP_ATTACHMENTS_DIR = "/tmp/stavrobot-temp";
+import { TEMP_ATTACHMENTS_DIR } from "./temp-dir.js";
+export { TEMP_ATTACHMENTS_DIR } from "./temp-dir.js";
 
 function buildPromptSuffix(publicHostname: string): string {
   const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone ?? process.env.TZ ?? "UTC";
@@ -290,11 +288,11 @@ export function createSendSignalMessageTool(): AgentTool {
   return {
     name: "send_signal_message",
     label: "Send Signal message",
-    description: "Send a message via Signal to a phone number. Can send text, an audio voice note (from a file path returned by text_to_speech), or both.",
+    description: "Send a message via Signal to a phone number. Can send text, a file attachment (from manage_files or text_to_speech), or both.",
     parameters: Type.Object({
       recipient: Type.String({ description: "Phone number in international format (e.g., \"+1234567890\")." }),
       message: Type.Optional(Type.String({ description: "Text message to send." })),
-      attachmentPath: Type.Optional(Type.String({ description: "File path to an attachment (e.g., from text_to_speech tool output)." })),
+      attachmentPath: Type.Optional(Type.String({ description: "File path to an attachment under the temp directory (e.g., from manage_files write or text_to_speech)." })),
     }),
     execute: async (
       toolCallId: string,
@@ -320,7 +318,14 @@ export function createSendSignalMessageTool(): AgentTool {
       }
 
       if (attachmentPath !== undefined) {
-        const fileBuffer = await fs.readFile(attachmentPath);
+        const resolvedAttachmentPath = path.resolve(attachmentPath);
+        if (!resolvedAttachmentPath.startsWith(TEMP_ATTACHMENTS_DIR)) {
+          return {
+            content: [{ type: "text" as const, text: "Error: attachmentPath must be under the temporary attachments directory." }],
+            details: { message: "Error: attachmentPath must be under the temporary attachments directory." },
+          };
+        }
+        const fileBuffer = await fs.readFile(resolvedAttachmentPath);
         const body: {
           recipient: string;
           message?: string;
@@ -330,14 +335,11 @@ export function createSendSignalMessageTool(): AgentTool {
           recipient,
           message,
           attachment: fileBuffer.toString("base64"),
-          attachmentFilename: path.basename(attachmentPath),
+          attachmentFilename: path.basename(resolvedAttachmentPath),
         };
 
-        // Only delete files that were created in the temp attachments directory
-        // to avoid accidentally removing arbitrary files the agent was given access to.
-        if (attachmentPath.startsWith(TEMP_ATTACHMENTS_DIR)) {
-          await fs.unlink(attachmentPath);
-        }
+        // The path check above guarantees this is a temp file, so always delete it.
+        await fs.unlink(resolvedAttachmentPath);
 
         const response = await fetch("http://signal-bridge:8081/send", {
           method: "POST",
@@ -400,7 +402,7 @@ export function createSendTelegramMessageTool(config: TelegramConfig): AgentTool
     parameters: Type.Object({
       recipient: Type.String({ description: "Telegram chat ID to send the message to." }),
       message: Type.Optional(Type.String({ description: "Text message to send. Markdown formatting is supported." })),
-      attachmentPath: Type.Optional(Type.String({ description: "File path to an attachment. Images (jpg, jpeg, png, gif, webp), audio (mp3, ogg, oga, wav, m4a), and any other file type are supported." })),
+      attachmentPath: Type.Optional(Type.String({ description: "File path to an attachment under the temp directory (e.g., from manage_files write or text_to_speech). Images (jpg, jpeg, png, gif, webp), audio (mp3, ogg, oga, wav, m4a), and any other file type are supported." })),
     }),
     execute: async (
       toolCallId: string,
@@ -428,7 +430,15 @@ export function createSendTelegramMessageTool(config: TelegramConfig): AgentTool
       const baseUrl = `https://api.telegram.org/bot${config.botToken}`;
 
       if (attachmentPath !== undefined) {
-        const extension = path.extname(attachmentPath).toLowerCase();
+        const resolvedAttachmentPath = path.resolve(attachmentPath);
+        if (!resolvedAttachmentPath.startsWith(TEMP_ATTACHMENTS_DIR)) {
+          return {
+            content: [{ type: "text" as const, text: "Error: attachmentPath must be under the temporary attachments directory." }],
+            details: { message: "Error: attachmentPath must be under the temporary attachments directory." },
+          };
+        }
+
+        const extension = path.extname(resolvedAttachmentPath).toLowerCase();
         const imageExtensions = new Set([".jpg", ".jpeg", ".png", ".gif", ".webp"]);
         const audioExtensions = new Set([".mp3", ".ogg", ".oga", ".wav", ".m4a"]);
 
@@ -447,10 +457,10 @@ export function createSendTelegramMessageTool(config: TelegramConfig): AgentTool
 
         console.log("[stavrobot] send_telegram_message attachment type detected:", { extension, apiMethod });
 
-        const fileBuffer = await fs.readFile(attachmentPath);
+        const fileBuffer = await fs.readFile(resolvedAttachmentPath);
         const formData = new FormData();
         formData.append("chat_id", recipient);
-        formData.append(formFieldName, new Blob([fileBuffer]), path.basename(attachmentPath));
+        formData.append(formFieldName, new Blob([fileBuffer]), path.basename(resolvedAttachmentPath));
 
         if (message !== undefined) {
           const htmlCaption = await convertMarkdownToTelegramHtml(message);
@@ -458,11 +468,8 @@ export function createSendTelegramMessageTool(config: TelegramConfig): AgentTool
           formData.append("parse_mode", "HTML");
         }
 
-        // Only delete files that were created in the temp attachments directory
-        // to avoid accidentally removing arbitrary files the agent was given access to.
-        if (attachmentPath.startsWith(TEMP_ATTACHMENTS_DIR)) {
-          await fs.unlink(attachmentPath);
-        }
+        // The path check above guarantees this is a temp file, so always delete it.
+        await fs.unlink(resolvedAttachmentPath);
 
         const response = await fetch(`${baseUrl}/${apiMethod}`, {
           method: "POST",
@@ -644,7 +651,7 @@ export function createManageCronTool(pool: pg.Pool): AgentTool {
 export async function createAgent(config: Config, pool: pg.Pool): Promise<Agent> {
   const model = getModel(config.provider as any, config.model as any);
   const messages = await loadMessages(pool);
-  const tools = [createExecuteSqlTool(pool), createManageKnowledgeTool(pool), createSendSignalMessageTool(), createManageCronTool(pool), createRunPythonTool(), createUpsertPageTool(pool), createDeletePageTool(pool), createReadUploadTool(), createDeleteUploadTool(), createSearchTool(pool)];
+  const tools = [createExecuteSqlTool(pool), createManageKnowledgeTool(pool), createSendSignalMessageTool(), createManageCronTool(pool), createRunPythonTool(), createUpsertPageTool(pool), createDeletePageTool(pool), createReadUploadTool(), createDeleteUploadTool(), createSearchTool(pool), createManageFilesTool()];
   if (config.webSearch !== undefined) {
     tools.push(createWebSearchTool(config.webSearch));
   }
