@@ -212,6 +212,9 @@ const PLUGINS_PAGE_HTML = `<!DOCTYPE html>
       border-radius: 8px;
       padding: 16px;
     }
+    .plugin-card.collapsed {
+      cursor: pointer;
+    }
     .plugin-header {
       display: flex;
       align-items: center;
@@ -479,8 +482,13 @@ const PLUGINS_PAGE_HTML = `<!DOCTYPE html>
         </div>
       \`;
 
-      card.querySelector(".plugin-header").addEventListener("click", () => {
+      card.querySelector(".plugin-header").addEventListener("click", (e) => {
+        e.stopPropagation();
         card.classList.toggle("collapsed");
+      });
+      card.addEventListener("click", () => {
+        if (!card.classList.contains("collapsed")) return;
+        card.classList.remove("collapsed");
       });
 
       for (const input of card.querySelectorAll(".config-field input[data-key]")) {
