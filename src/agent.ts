@@ -263,7 +263,7 @@ export function createTextToSpeechTool(ttsConfig: TtsConfig): AgentTool {
   return {
     name: "text_to_speech",
     label: "Text to speech",
-    description: "Convert text to speech audio. Returns a file path to the generated audio file. Use this to create voice notes that can be sent via send_signal_message.",
+    description: "Convert text to speech audio. Returns a file path to the generated audio file. Use this to create voice notes that can be sent via send_signal_message or send_telegram_message.",
     parameters: Type.Object({
       text: Type.String({ description: "The text to convert to speech." }),
     }),

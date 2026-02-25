@@ -385,10 +385,6 @@ async function main(): Promise<void> {
   initializeQueue(agent, pool, config);
   await initializeScheduler(pool);
 
-  if (config.telegram !== undefined) {
-    await registerTelegramWebhook(config.telegram, config.publicHostname!);
-  }
-
   const server = http.createServer((request: http.IncomingMessage, response: http.ServerResponse): void => {
     const url = new URL(request.url || "/", `http://${request.headers.host}`);
     const pathname = url.pathname;
@@ -459,9 +455,10 @@ async function main(): Promise<void> {
   });
 
   const port = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
-  server.listen(port, () => {
+  await new Promise<void>((resolve) => server.listen(port, () => {
     console.log(`Server listening on port ${port}`);
-  });
+    resolve();
+  }));
 
   const internalServer = http.createServer((request: http.IncomingMessage, response: http.ServerResponse): void => {
     if (request.method === "POST" && new URL(request.url || "/", "http://localhost").pathname === "/chat") {
@@ -472,9 +469,14 @@ async function main(): Promise<void> {
     }
   });
 
-  internalServer.listen(3001, () => {
+  await new Promise<void>((resolve) => internalServer.listen(3001, () => {
     console.log("[stavrobot] Internal server listening on port 3001");
-  });
+    resolve();
+  }));
+
+  if (config.telegram !== undefined) {
+    await registerTelegramWebhook(config.telegram, config.publicHostname!);
+  }
 }
 
 // Only run main() when this file is the entry point, not when imported by tests.

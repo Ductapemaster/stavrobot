@@ -68,8 +68,20 @@ Signal requires a **separate phone number** — not your personal one. A prepaid
 
 1. Message @BotFather on Telegram, create a new bot, and copy the token.
 2. Message @userinfobot on Telegram to get your chat ID.
-3. Set `[telegram].botToken`, `[telegram].webhookHost`, and `[telegram].allowedChatIds` in your config.
-4. The webhook is registered automatically when the app starts.
+3. Set `[telegram].botToken` and `[telegram].allowedChatIds` in your config.
+4. Set the top-level `publicHostname` to your server's public HTTPS URL, or configure `[ngrok]` to get one automatically (see below).
+5. The webhook is registered automatically when the app starts.
+
+### ngrok setup (optional, for dynamic public URLs)
+
+If you don't have a static public HTTPS URL, you can use ngrok to expose the app:
+
+1. Sign up at [ngrok.com](https://ngrok.com) and get an auth token.
+2. Add `NGROK_AUTHTOKEN=your_token` to your `.env` file and uncomment `COMPOSE_PROFILES=ngrok`.
+3. Add `[ngrok]` to `data/main/config.toml` (you can omit `publicHostname` when using ngrok).
+4. Start with `docker compose --profile ngrok up --build`.
+
+The app will automatically discover the ngrok tunnel URL at startup and register the Telegram webhook with it.
 
 ### Running
 

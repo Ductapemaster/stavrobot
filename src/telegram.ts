@@ -102,6 +102,15 @@ const telegramRenderer: RendererObject = {
     return escapeTelegramHtml(text);
   },
 
+  // Plain text tokens must have HTML entities escaped so Telegram's HTML
+  // parser doesn't reject responses containing &, <, or >.
+  text({ text, tokens }: Tokens.Text): string {
+    if (tokens !== undefined && tokens.length > 0) {
+      return this.parser.parseInline(tokens);
+    }
+    return escapeTelegramHtml(text);
+  },
+
   // Horizontal rules have no Telegram equivalent; render as a blank line.
   hr(): string {
     return "\n";
