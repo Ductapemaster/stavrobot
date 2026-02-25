@@ -1,7 +1,7 @@
 ---
 title: Gym tracking
 description: Track workouts, exercises, body measurements, and view progress over time.
-version: 1
+version: 2
 author: Stavros Korokithakis
 ---
 
