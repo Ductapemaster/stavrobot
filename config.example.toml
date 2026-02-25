@@ -26,7 +26,18 @@ normal dashes rather than en- or em-dashes. Don't end messages with a full stop,
 too formal.
 """
 
-# Signal integration. account is the phone number registered with signal-cli.
+# Optional. When set, the main chat agent uses a local LLM via LM Studio's
+# OpenAI-compatible API instead of the provider/model/apiKey settings above.
+# Coding tasks (the coder container) are unaffected and still use Claude Code.
+# The top-level apiKey and authFile settings are not required when this is set.
+# LM Studio must be running with the server enabled (default: http://localhost:1234).
+# [lmstudio]
+# baseUrl = "http://localhost:1234/v1"
+# model = "lmstudio-community/meta-llama-3.1-8b-instruct"
+# contextWindow = 32768  # Optional. Model context window size in tokens (default: 32768).
+# maxTokens = 4096       # Optional. Maximum output tokens (default: 4096).
+
+
 # allowedNumbers is the allowlist of numbers permitted to message the agent.
 [signal]
 account = "+1234567890"
