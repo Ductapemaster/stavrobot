@@ -24,18 +24,21 @@ prune_backups() {
 		return
 	fi
 
-	# The 30 most recent files are always kept regardless of the other rules.
-	local daily_keep=30
-	local daily_cutoff=$((total - daily_keep))
+	# The 24 most recent files are always kept (one per hour for a day).
+	local hourly_keep=24
+	local hourly_cutoff=$((total - hourly_keep))
 
 	declare -A seen_years
 	declare -A seen_months
+	declare -A seen_days
+	local daily_count=0
+	local daily_limit=30
 	local monthly_count=0
 	local monthly_limit=12
 
 	# Determine which files to keep. We iterate oldest-first so that the first
-	# file seen for a given year/month is the oldest one for that period, which
-	# is the one we want to keep as the representative snapshot.
+	# file seen for a given year/month/day is the oldest one for that period,
+	# which is the one we want to keep as the representative snapshot.
 	local -a keepers=()
 	for ((i = 0; i < total; i++)); do
 		local file="${files[$i]}"
@@ -46,6 +49,7 @@ prune_backups() {
 		date_part="${date_part:0:10}"
 		local year="${date_part:0:4}"
 		local year_month="${date_part:0:7}"
+		local year_month_day="${date_part}"
 
 		local keep=false
 
@@ -65,8 +69,18 @@ prune_backups() {
 			fi
 		fi
 
-		# Daily rule: the 30 most recent files are always kept.
-		if [[ "${i}" -ge "${daily_cutoff}" ]]; then
+		# Daily rule: keep the first file seen for each day, up to 30.
+		# Yearly/monthly keepers don't consume a daily slot.
+		if [[ -z "${seen_days[$year_month_day]+_}" ]]; then
+			seen_days[$year_month_day]=1
+			if [[ "${keep}" == false && "${daily_count}" -lt "${daily_limit}" ]]; then
+				((daily_count++))
+				keep=true
+			fi
+		fi
+
+		# Hourly rule: the 24 most recent files are always kept.
+		if [[ "${i}" -ge "${hourly_cutoff}" ]]; then
 			keep=true
 		fi
 
