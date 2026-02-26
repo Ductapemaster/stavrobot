@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import pg from "pg";
-import { Type, getModel, type TextContent, type ImageContent, type AssistantMessage, complete } from "@mariozechner/pi-ai";
+import { Type, getModel, type TextContent, type ImageContent, type AssistantMessage, type ToolCall, complete } from "@mariozechner/pi-ai";
 import { Agent, type AgentTool, type AgentToolResult, type AgentMessage } from "@mariozechner/pi-agent-core";
 import type { Config, TelegramConfig, TtsConfig } from "./config.js";
 import type { FileAttachment } from "./uploads.js";
@@ -747,7 +747,7 @@ export async function createAgent(config: Config, pool: pg.Pool): Promise<Agent>
   return agent;
 }
 
-function serializeMessagesForSummary(messages: AgentMessage[]): string {
+export function serializeMessagesForSummary(messages: AgentMessage[]): string {
   const lines: string[] = [];
 
   for (const message of messages) {
@@ -771,6 +771,23 @@ function serializeMessagesForSummary(messages: AgentMessage[]): string {
         .join("");
       if (textContent) {
         lines.push(`Assistant: ${textContent}`);
+      }
+      for (const block of content) {
+        if (block.type === "toolCall") {
+          const toolCall = block as ToolCall;
+          const args = Object.entries(toolCall.arguments)
+            .map(([key, value]) => {
+              if (typeof value === "string") {
+                return `${key}=${JSON.stringify(value)}`;
+              }
+              if (typeof value === "object" && value !== null) {
+                return `${key}=${JSON.stringify(value)}`;
+              }
+              return `${key}=${String(value)}`;
+            })
+            .join(", ");
+          lines.push(`Assistant called ${toolCall.name}(${args})`);
+        }
       }
     } else if (message.role === "toolResult") {
       const content = Array.isArray(message.content) ? message.content : [];

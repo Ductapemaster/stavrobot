@@ -435,3 +435,4 @@ entrypoint.sh       — App container entrypoint.
 - `busboy` — Multipart form data parsing for file uploads.
 - `cron-parser` — Cron expression parsing for the scheduler.
 - `marked` — Markdown parsing for Telegram HTML conversion.
+- `@toon-format/toon` — Serialises structured data (objects, arrays) to TOON format for LLM-readable output. Used in `toon.ts` via `encodeToToon()`.
