@@ -22,5 +22,6 @@ Rules:
 - Omit small talk, acknowledgments, and noise (e.g. "Ok, thank you", "Hi", test messages) unless they carry meaning.
 - Don't repeat information that's already in the assistant's persistent memories or scratchpad - the summary should only capture what's NEW in this conversation.
 - Don't include meta-information about the conversation format (e.g. "User communicates via Signal") - that's already in the system prompt.
+- The conversation may begin with a previous summary (marked "[Summary of earlier conversation]"). Incorporate its still-relevant content into your new summary rather than discarding it.
 - Keep it concise but complete. If in doubt about whether something matters, include it.
 - Omit any section that would be empty.
