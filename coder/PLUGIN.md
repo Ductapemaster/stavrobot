@@ -15,6 +15,7 @@ A plugin is typically a git repository. The plugin manifest lives at the reposit
 ```
 my-plugin/                 # Repository root (e.g., github.com/user/my-plugin)
 ├── manifest.json          # Plugin manifest (required, at repo root)
+├── README.md              # Plugin documentation (required)
 ├── init.py                # Init script (declared in manifest)
 ├── my_tool/
 │   ├── manifest.json      # Tool manifest (required)
@@ -25,6 +26,15 @@ my-plugin/                 # Repository root (e.g., github.com/user/my-plugin)
 ```
 
 When installed, the repository is cloned into `data/plugins/my-plugin/`.
+
+## README
+
+Every plugin must include a `README.md` at the repository root. The README should contain:
+
+- A summary of what the plugin does and why a user would want to install it.
+- Installation instructions (e.g., the git URL to pass to the install command, any required configuration values and how to obtain them).
+
+This is the first thing a potential user sees when browsing the repository, so it should be concise and practical.
 
 ## Plugin manifest
 
