@@ -33,7 +33,7 @@ services:
       PGUSER: ${POSTGRES_USER:-stavrobot}
       PGPASSWORD: ${POSTGRES_PASSWORD:-stavrobot}
       PGDATABASE: ${POSTGRES_DB:-stavrobot}
-      COMPACTION_DEBUG: ${COMPACTION_DEBUG:-0}
+      STAVROBOT_DEBUG: ${STAVROBOT_DEBUG:-0}
       CONFIG_PATH: /app/config/config.toml
     restart: unless-stopped
     volumes:

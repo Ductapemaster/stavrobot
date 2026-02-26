@@ -39,7 +39,7 @@ let compactionInProgress = false;
 // in-memory state reflects the compacted history.
 let compactionCompleted = false;
 
-const COMPACTION_DEBUG = process.env.COMPACTION_DEBUG === "1";
+const STAVROBOT_DEBUG = process.env.STAVROBOT_DEBUG === "1";
 
 export function createExecuteSqlTool(pool: pg.Pool): AgentTool {
   return {
@@ -869,7 +869,7 @@ export async function handlePrompt(
     agent.replaceMessages(reloadedMessages);
     compactionCompleted = false;
     console.log(`[stavrobot] Reloaded ${reloadedMessages.length} messages after background compaction.`);
-    if (COMPACTION_DEBUG) {
+    if (STAVROBOT_DEBUG) {
       console.log("[stavrobot] [compaction-debug] Reloaded messages:");
       for (let i = 0; i < reloadedMessages.length; i++) {
         const message = reloadedMessages[i];
@@ -1046,7 +1046,7 @@ export async function handlePrompt(
     // and never touches agent.state.messages directly.
     const currentMessages = agent.state.messages.slice();
 
-    if (COMPACTION_DEBUG) {
+    if (STAVROBOT_DEBUG) {
       console.log(`[stavrobot] [compaction-debug] Compaction triggered: ${currentMessages.length} messages in memory`);
       for (let i = 0; i < currentMessages.length; i++) {
         const message = currentMessages[i];
@@ -1080,7 +1080,7 @@ export async function handlePrompt(
         const messagesToCompact = currentMessages.slice(0, cutIndex);
         const messagesToKeep = currentMessages.slice(cutIndex);
 
-        if (COMPACTION_DEBUG) {
+        if (STAVROBOT_DEBUG) {
           console.log(`[stavrobot] [compaction-debug] Cut point: index=${cutIndex}, compacting=${messagesToCompact.length}, keeping=${messagesToKeep.length}`);
           console.log(`[stavrobot] [compaction-debug] Last compacted message: role=${messagesToCompact[messagesToCompact.length - 1].role}`);
           console.log(`[stavrobot] [compaction-debug] First kept message: role=${messagesToKeep[0].role}`);
@@ -1088,7 +1088,7 @@ export async function handlePrompt(
 
         const serializedMessages = serializeMessagesForSummary(messagesToCompact);
 
-        if (COMPACTION_DEBUG) {
+        if (STAVROBOT_DEBUG) {
           console.log(`[stavrobot] [compaction-debug] Serialized input for summarizer (${serializedMessages.length} chars):`);
           console.log(serializedMessages);
         }
@@ -1122,7 +1122,7 @@ export async function handlePrompt(
           .map((block) => block.text)
           .join("");
 
-        if (COMPACTION_DEBUG) {
+        if (STAVROBOT_DEBUG) {
           console.log(`[stavrobot] [compaction-debug] Summary output (${summaryText.length} chars):`);
           console.log(summaryText);
         }
@@ -1144,7 +1144,7 @@ export async function handlePrompt(
         }
         const upToMessageId = cutoffResult.rows[0].id as number;
 
-        if (COMPACTION_DEBUG) {
+        if (STAVROBOT_DEBUG) {
           console.log(`[stavrobot] [compaction-debug] Boundary: previousBoundary=${previousBoundary}, keepCount=${keepCount}, upToMessageId=${upToMessageId}`);
         }
 
