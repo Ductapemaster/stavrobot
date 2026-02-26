@@ -64,7 +64,7 @@ prune_backups() {
 		if [[ -z "${seen_months[$year_month]+_}" ]]; then
 			seen_months[$year_month]=1
 			if [[ "${keep}" == false && "${monthly_count}" -lt "${monthly_limit}" ]]; then
-				((monthly_count++))
+				monthly_count=$((monthly_count + 1))
 				keep=true
 			fi
 		fi
@@ -74,7 +74,7 @@ prune_backups() {
 		if [[ -z "${seen_days[$year_month_day]+_}" ]]; then
 			seen_days[$year_month_day]=1
 			if [[ "${keep}" == false && "${daily_count}" -lt "${daily_limit}" ]]; then
-				((daily_count++))
+				daily_count=$((daily_count + 1))
 				keep=true
 			fi
 		fi
