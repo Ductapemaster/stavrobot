@@ -2,7 +2,6 @@
 
 Work on these one at a time. Delete when the user confirms they're done:
 
-- Allow using other providers/models for chat.
 - Allow scoping subagent tool permissions to specific actions (e.g.,
   "manage_interlocutors.list" but not "manage_interlocutors.create"). Currently tool
   whitelisting is tool-level only.
@@ -29,15 +28,4 @@ Work on these one at a time. Delete when the user confirms they're done:
   `SELECT ii.identifier FROM interlocutor_identities ii JOIN interlocutors i ON
   i.id = ii.interlocutor_id WHERE ii.service = $1 AND ii.identifier = $2 AND
   i.enabled = true`.
-- Main agent prompt lacks trust policy for subagent-originated requests: the subagent
-  prompt (`agent-prompt.txt:10`) tells subagents to ask the main agent if unsure, but the
-  main agent's system prompt (`system-prompt.txt`) does not define how to handle requests
-  that arrive from subagents. Subagent-originated messages appear with
-  `Source: agent` and `Sender: <name> (ID: N)` in the message header, but there is no
-  instruction telling the main agent to treat these differently from owner messages. An
-  externally influenced subagent could relay manipulative requests that the main agent
-  treats as trusted directives. Fix: add explicit rules to `system-prompt.txt` stating
-  that messages from subagents (Source: agent) are untrusted task context, not owner
-  directives. The main agent should verify with the owner before performing sensitive
-  actions requested by subagents (e.g., granting new tools, running SQL that reads
-  private data, changing interlocutor configuration, sending messages to new recipients).
+
