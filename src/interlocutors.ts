@@ -133,11 +133,19 @@ export function createManageInterlocutorsTool(pool: pg.Pool): AgentTool {
           );
           newId = result.rows[0].id;
           if (hasService && hasIdentifier) {
-            await client.query(
+            const identityResult = await client.query(
               `INSERT INTO interlocutor_identities (interlocutor_id, service, identifier) VALUES ($1, $2, $3)
                ON CONFLICT (service, identifier) WHERE identifier IS NOT NULL DO NOTHING`,
               [newId, raw.service!.trim(), raw.identifier!.trim()],
             );
+            if (identityResult.rowCount === 0) {
+              await client.query("ROLLBACK");
+              const errorMessage = `Error: identity (${raw.service!.trim()}, ${raw.identifier!.trim()}) is already assigned to another interlocutor.`;
+              return {
+                content: [{ type: "text" as const, text: errorMessage }],
+                details: { message: errorMessage },
+              };
+            }
           }
           await client.query("COMMIT");
         } catch (error) {
@@ -270,11 +278,18 @@ export function createManageInterlocutorsTool(pool: pg.Pool): AgentTool {
           };
         }
 
-        await pool.query(
+        const identityResult = await pool.query(
           `INSERT INTO interlocutor_identities (interlocutor_id, service, identifier) VALUES ($1, $2, $3)
            ON CONFLICT (service, identifier) WHERE identifier IS NOT NULL DO NOTHING`,
           [raw.id, raw.service.trim(), raw.identifier.trim()],
         );
+        if (identityResult.rowCount === 0) {
+          const errorMessage = `Error: identity (${raw.service.trim()}, ${raw.identifier.trim()}) is already assigned to another interlocutor.`;
+          return {
+            content: [{ type: "text" as const, text: errorMessage }],
+            details: { message: errorMessage },
+          };
+        }
 
         const message = `Identity added to interlocutor ${raw.id}.`;
         console.log(`[stavrobot] ${message}`);

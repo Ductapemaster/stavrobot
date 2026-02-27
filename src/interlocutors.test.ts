@@ -106,6 +106,10 @@ describe("manage_interlocutors — create", () => {
       if (clientCallCount === 2) {
         return Promise.resolve({ rows: [{ id: 7 }], rowCount: 1 } as unknown as QueryResult);
       }
+      // Third call is the INSERT identity — return rowCount: 1 to indicate success.
+      if (clientCallCount === 3) {
+        return Promise.resolve({ rows: [], rowCount: 1 } as unknown as QueryResult);
+      }
       return Promise.resolve({ rows: [], rowCount: 0 } as unknown as QueryResult);
     });
     const tool = createManageInterlocutorsTool(pool);
@@ -117,6 +121,34 @@ describe("manage_interlocutors — create", () => {
       identifier: "+1234567890",
     });
     expect(makeText(result)).toBe("Interlocutor 7 created.");
+  });
+
+  it("returns an error and rolls back when the identity conflicts during create", async () => {
+    // The transaction runs on the client: BEGIN, INSERT interlocutor, INSERT identity (conflict), ROLLBACK.
+    let clientCallCount = 0;
+    const pool = makeMockPool(() => {
+      clientCallCount++;
+      // Second call is the INSERT interlocutor returning the new ID.
+      if (clientCallCount === 2) {
+        return Promise.resolve({ rows: [{ id: 7 }], rowCount: 1 } as unknown as QueryResult);
+      }
+      // Third call is the INSERT identity — return rowCount: 0 to simulate a conflict.
+      if (clientCallCount === 3) {
+        return Promise.resolve({ rows: [], rowCount: 0 } as unknown as QueryResult);
+      }
+      return Promise.resolve({ rows: [], rowCount: 0 } as unknown as QueryResult);
+    });
+    const tool = createManageInterlocutorsTool(pool);
+    const result = await tool.execute("call-1", {
+      action: "create",
+      display_name: "Bob",
+      service: "signal",
+      identifier: "+1234567890",
+    });
+    expect(makeText(result)).toContain("Error:");
+    expect(makeText(result)).toContain("signal");
+    expect(makeText(result)).toContain("+1234567890");
+    expect(makeText(result)).toContain("already assigned to another interlocutor");
   });
 });
 
@@ -236,6 +268,16 @@ describe("manage_interlocutors — add_identity", () => {
     const tool = createManageInterlocutorsTool(pool);
     const result = await tool.execute("call-1", { action: "add_identity", id: 5, service: "signal", identifier: "+1234567890" });
     expect(makeText(result)).toBe("Identity added to interlocutor 5.");
+  });
+
+  it("returns an error when the identity conflicts during add_identity", async () => {
+    const pool = makeMockPool(() => Promise.resolve({ rows: [], rowCount: 0 } as unknown as QueryResult));
+    const tool = createManageInterlocutorsTool(pool);
+    const result = await tool.execute("call-1", { action: "add_identity", id: 5, service: "signal", identifier: "+1234567890" });
+    expect(makeText(result)).toContain("Error:");
+    expect(makeText(result)).toContain("signal");
+    expect(makeText(result)).toContain("+1234567890");
+    expect(makeText(result)).toContain("already assigned to another interlocutor");
   });
 });
 
